@@ -1,14 +1,15 @@
-/* solar-potential-frontend App.js */
 import React, { useState } from 'react';
 import axios from 'axios';
 import { Bar, Line } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js';
 import './App.css';
+import UAParser from 'ua-parser-js';
+import PrivacyPolicyModal from './components/PrivacyPolicyModal/PrivacyPolicyModal';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend);
 
 function App() {
-  const [address, setAddress] = useState('');
+  const [address, setAddress] = useState({ street: '', city: '', state: '', zip: '', country: '' });
   const [systemSize, setSystemSize] = useState(7);
   const [panelEfficiency, setPanelEfficiency] = useState(0.20);
   const [electricityRate, setElectricityRate] = useState('');
@@ -16,6 +17,7 @@ function App() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [isPrivacyPolicyOpen, setIsPrivacyPolicyOpen] = useState(false);
 
   const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -24,18 +26,36 @@ function App() {
     setLoading(true);
     setError(null);
     setResult(null);
-
+  
+    const parser = new UAParser();
+    const browserData = {
+      userAgent: navigator.userAgent,
+      screenResolution: `${window.screen.width}x${window.screen.height}`,
+      languagePreference: navigator.language,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      referrerUrl: document.referrer,
+      deviceType: parser.getDevice().type || 'desktop'
+    };
+  
     try {
-      const response = await axios.post('http://localhost:8000/solar-calculation', {
+      const userDataResponse = await axios.post('http://localhost:8000/api/user-data', {
         address,
+        browserData
+      });
+  
+      const addressGuid = userDataResponse.data.guid;
+  
+      const response = await axios.post('http://localhost:8000/api/solar-potential', {
+        guid: addressGuid,
         system_size: systemSize,
         panel_efficiency: panelEfficiency,
         electricity_rate: parseFloat(electricityRate),
         installation_cost_per_watt: installationCost
       });
+  
       setResult(response.data);
     } catch (err) {
-      setError(err.response?.data?.detail || 'An error occurred');
+      setError(err.response?.data?.detail || err.message || 'An error occurred');
     } finally {
       setLoading(false);
     }
@@ -91,9 +111,37 @@ function App() {
       <form onSubmit={handleSubmit}>
         <input
           type="text"
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder="Enter address"
+          value={address.street}
+          onChange={(e) => setAddress({ ...address, street: e.target.value })}
+          placeholder="Enter street address"
+          required
+        />
+        <input
+          type="text"
+          value={address.city}
+          onChange={(e) => setAddress({ ...address, city: e.target.value })}
+          placeholder="Enter city"
+          required
+        />
+        <input
+          type="text"
+          value={address.state}
+          onChange={(e) => setAddress({ ...address, state: e.target.value })}
+          placeholder="Enter state"
+          required
+        />
+        <input
+          type="text"
+          value={address.zip}
+          onChange={(e) => setAddress({ ...address, zip: e.target.value })}
+          placeholder="Enter zip code"
+          required
+        />
+        <input
+          type="text"
+          value={address.country}
+          onChange={(e) => setAddress({ ...address, country: e.target.value })}
+          placeholder="Enter country"
           required
         />
         <input
@@ -127,14 +175,12 @@ function App() {
           step="0.01"
           required
         />
-        <button type="submit" disabled={loading}>
-          {loading ? 'Calculating...' : 'Calculate Solar Potential'}
-        </button>
+      <button type="submit" disabled={loading}>
+        {loading ? 'Calculating...' : 'Calculate'}
+      </button>
       </form>
-
-      {error && <p className="error">{error}</p>}
-
-      {result && result.solar_data && (
+      {error && <p className="error">{typeof error === 'object' ? JSON.stringify(error) : error}</p>}
+      {result && (
         <div className="result">
           <h2>Solar Potential Results</h2>
           <p>Address: {result.solar_data.address}</p>
@@ -198,6 +244,10 @@ function App() {
           </div>
         </div>
       )}
+      <footer>
+        <a href="#" onClick={() => setIsPrivacyPolicyOpen(true)}>Privacy Policy</a>
+      </footer>
+      <PrivacyPolicyModal isOpen={isPrivacyPolicyOpen} onClose={() => setIsPrivacyPolicyOpen(false)} />
     </div>
   );
 }
