@@ -1,38 +1,41 @@
-/* solar-potential-frontend css */
 .App {
-  max-width: 600px;
+  font-family: Arial, sans-serif;
+  max-width: 800px;
   margin: 0 auto;
   padding: 20px;
-  font-family: Arial, sans-serif;
+}
+
+h1, h3 {
+  color: #333;
 }
 
 form {
   display: flex;
+  flex-direction: column;
+  gap: 10px;
   margin-bottom: 20px;
 }
 
-input {
-  flex-grow: 1;
+input, button {
   padding: 10px;
   font-size: 16px;
 }
 
 button {
-  padding: 10px 20px;
-  font-size: 16px;
+  cursor: pointer;
   background-color: #4CAF50;
   color: white;
   border: none;
-  cursor: pointer;
+  transition: background-color 0.3s;
 }
 
-button:disabled {
-  background-color: #cccccc;
+button:hover {
+  background-color: #45a049;
 }
 
 .error {
   color: red;
-  margin-bottom: 20px;
+  margin-bottom: 10px;
 }
 
 .result {
@@ -41,26 +44,6 @@ button:disabled {
   border-radius: 5px;
 }
 
-.result h2 {
-  margin-top: 0;
-}
-
 .chart-container {
   margin-top: 20px;
-  margin-bottom: 20px;
-}
-
-.explanation {
-  background-color: #f9f9f9;
-  padding: 15px;
-  border-radius: 5px;
-  margin-top: 20px;
-}
-
-.explanation h3 {
-  margin-top: 0;
-}
-
-.explanation ul {
-  padding-left: 20px;
 }

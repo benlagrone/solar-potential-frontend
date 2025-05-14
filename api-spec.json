@@ -1,0 +1,280 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "Solar Potential Calculator API",
+        "description": "API for calculating solar potential and storing user data.",
+        "version": "1.0.0"
+    },
+    "paths": {
+        "/api/user-data": {
+            "post": {
+                "summary": "Store User Data",
+                "description": "Stores user data including address and browser information.",
+                "operationId": "store_user_data_api_user_data_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UserData"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "title": "Response Store User Data Api User Data Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/solar-potential": {
+            "post": {
+                "summary": "Calculate Solar Potential",
+                "description": "Calculates the solar potential based on user data and system specifications.",
+                "operationId": "calculate_solar_potential_api_solar_potential_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SolarPotentialRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "title": "Response Calculate Solar Potential Api Solar Potential Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/privacy-policy": {
+            "get": {
+                "summary": "Get Privacy Policy",
+                "description": "Returns the privacy policy of the application.",
+                "operationId": "get_privacy_policy_api_privacy_policy_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "title": "Response Get Privacy Policy Api Privacy Policy Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Address": {
+                "properties": {
+                    "street": {
+                        "type": "string",
+                        "title": "Street"
+                    },
+                    "city": {
+                        "type": "string",
+                        "title": "City"
+                    },
+                    "state": {
+                        "type": "string",
+                        "title": "State"
+                    },
+                    "zip": {
+                        "type": "string",
+                        "title": "Zip"
+                    },
+                    "country": {
+                        "type": "string",
+                        "title": "Country"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "street",
+                    "city",
+                    "state",
+                    "zip",
+                    "country"
+                ],
+                "title": "Address"
+            },
+            "BrowserData": {
+                "properties": {
+                    "userAgent": {
+                        "type": "string",
+                        "title": "Useragent"
+                    },
+                    "screenResolution": {
+                        "type": "string",
+                        "title": "Screenresolution"
+                    },
+                    "languagePreference": {
+                        "type": "string",
+                        "title": "Languagepreference"
+                    },
+                    "timeZone": {
+                        "type": "string",
+                        "title": "Timezone"
+                    },
+                    "referrerUrl": {
+                        "type": "string",
+                        "title": "Referrerurl"
+                    },
+                    "deviceType": {
+                        "type": "string",
+                        "title": "Devicetype"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "userAgent",
+                    "screenResolution",
+                    "languagePreference",
+                    "timeZone",
+                    "referrerUrl",
+                    "deviceType"
+                ],
+                "title": "BrowserData"
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "SolarPotentialRequest": {
+                "properties": {
+                    "guid": {
+                        "type": "string",
+                        "title": "Guid"
+                    },
+                    "system_size": {
+                        "type": "number",
+                        "title": "System Size",
+                        "default": 7
+                    },
+                    "panel_efficiency": {
+                        "type": "number",
+                        "title": "Panel Efficiency",
+                        "default": 0.2
+                    },
+                    "electricity_rate": {
+                        "type": "number",
+                        "title": "Electricity Rate"
+                    },
+                    "installation_cost_per_watt": {
+                        "type": "number",
+                        "title": "Installation Cost Per Watt",
+                        "default": 3
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "guid",
+                    "electricity_rate"
+                ],
+                "title": "SolarPotentialRequest"
+            },
+            "UserData": {
+                "properties": {
+                    "address": {
+                        "$ref": "#/components/schemas/Address"
+                    },
+                    "browserData": {
+                        "$ref": "#/components/schemas/BrowserData"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "address",
+                    "browserData"
+                ],
+                "title": "UserData"
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            }
+        }
+    }
+}
