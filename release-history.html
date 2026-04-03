@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Solar Buddy Release History</title>
+    <meta
+      name="description"
+      content="Archived release notes and feature commitments for Solar Buddy and Garden Buddy."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        --text-main: #142033;
+        --text-muted: #5f6b7d;
+        --surface: rgba(255, 255, 255, 0.9);
+        --surface-border: rgba(20, 32, 51, 0.12);
+        --accent: #1f6c5c;
+        --accent-strong: #154c42;
+        --sun: #f2ab27;
+        --shadow: 0 24px 60px rgba(15, 27, 44, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Manrope", "Segoe UI", sans-serif;
+        color: var(--text-main);
+        background:
+          radial-gradient(circle at top left, rgba(241, 182, 58, 0.24), transparent 28%),
+          radial-gradient(circle at top right, rgba(32, 111, 94, 0.16), transparent 24%),
+          linear-gradient(180deg, #f6efe2 0%, #f3efe8 48%, #eef2ee 100%);
+      }
+
+      main {
+        width: min(1100px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 64px;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .back-link {
+        display: inline-flex;
+        margin-bottom: 24px;
+        color: var(--text-muted);
+        text-decoration: none;
+        border-bottom: 1px solid rgba(20, 32, 51, 0.18);
+      }
+
+      .back-link:hover {
+        color: var(--text-main);
+        border-bottom-color: rgba(20, 32, 51, 0.4);
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent-strong);
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        font-family: "Space Grotesk", "Avenir Next", sans-serif;
+        letter-spacing: -0.04em;
+      }
+
+      h1 {
+        font-size: clamp(2.6rem, 5vw, 4.8rem);
+        line-height: 0.94;
+        max-width: 10ch;
+      }
+
+      .intro {
+        margin: 16px 0 32px;
+        max-width: 64ch;
+        color: var(--text-muted);
+        line-height: 1.7;
+      }
+
+      .track-grid {
+        display: grid;
+        gap: 24px;
+      }
+
+      .track-card {
+        background: var(--surface);
+        border: 1px solid var(--surface-border);
+        border-radius: 28px;
+        padding: 28px;
+        box-shadow: var(--shadow);
+      }
+
+      .track-copy {
+        margin: 12px 0 0;
+        color: var(--text-muted);
+        line-height: 1.65;
+        max-width: 68ch;
+      }
+
+      .history-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+        margin-top: 24px;
+      }
+
+      .history-group {
+        border-radius: 22px;
+        padding: 18px;
+        border: 1px solid rgba(20, 32, 51, 0.08);
+      }
+
+      .history-group h3 {
+        font-size: 1rem;
+      }
+
+      .history-group-live {
+        background: rgba(247, 255, 252, 0.84);
+      }
+
+      .history-group-next {
+        background: rgba(255, 249, 235, 0.92);
+      }
+
+      .history-group-later {
+        background: rgba(255, 255, 255, 0.68);
+      }
+
+      ul {
+        margin: 14px 0 0;
+        padding-left: 18px;
+        display: grid;
+        gap: 10px;
+        color: var(--text-muted);
+        line-height: 1.55;
+      }
+
+      @media (max-width: 900px) {
+        .history-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        main {
+          width: min(100% - 24px, 1100px);
+          padding: 24px 0 48px;
+        }
+
+        .track-card {
+          padding: 22px;
+          border-radius: 24px;
+        }
+
+        h1 {
+          font-size: 2.5rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a class="back-link" href="/">Back to Solar Buddy</a>
+
+      <p class="eyebrow">Release history</p>
+      <h1>Product notes live here instead.</h1>
+      <p class="intro">
+        The main app stays focused on property lookup, drawing, and planning workflows. This page
+        keeps the longer release-status detail off the front page while still preserving it.
+      </p>
+
+      <div class="track-grid">
+        <section class="track-card">
+          <p class="eyebrow">Solar Buddy</p>
+          <h2>Current release posture</h2>
+          <p class="track-copy">
+            What Solar Buddy does now, what is committed next, and what remains outside the current
+            public release promise.
+          </p>
+
+          <div class="history-grid">
+            <section class="history-group history-group-live">
+              <h3>Live now</h3>
+              <ul>
+                <li>Address-first property lookup and real map rendering</li>
+                <li>Browser location lookup that fills the map and address form</li>
+                <li>Street and terrain map modes for property inspection</li>
+                <li>Roof polygon drawing directly on the live map</li>
+                <li>Persist roof geometry with the property record</li>
+                <li>Feed saved roof geometry into the estimate sizing</li>
+                <li>Surface clearer estimate assumptions and confidence on the results</li>
+                <li>Model monthly production from roof-backed sizing and explicit system-loss assumptions</li>
+                <li>Save solar report snapshots with the current property record</li>
+              </ul>
+            </section>
+
+            <section class="history-group history-group-next">
+              <h3>Committed next</h3>
+              <ul>
+                <li>Move from saved planning reports toward a shareable homeowner quote workflow</li>
+                <li>Add parcel- and tilt-aware production refinement beyond first-pass roof drawing</li>
+                <li>Layer qualified lead capture and installer handoff on top of saved reports</li>
+              </ul>
+            </section>
+
+            <section class="history-group history-group-later">
+              <h3>Later, not committed</h3>
+              <ul>
+                <li>Parcel-grade roof enrichment on every property</li>
+                <li>Quote-grade guarantees before lead qualification</li>
+                <li>Premium data layers by default in the public workflow</li>
+              </ul>
+            </section>
+          </div>
+        </section>
+
+        <section class="track-card">
+          <p class="eyebrow">Garden Buddy</p>
+          <h2>Current release posture</h2>
+          <p class="track-copy">
+            Garden Buddy uses the same property foundation, but its release scope and roadmap are
+            tracked separately from the solar workflow.
+          </p>
+
+          <div class="history-grid">
+            <section class="history-group history-group-live">
+              <h3>Live now</h3>
+              <ul>
+                <li>Address-first property lookup and real map rendering</li>
+                <li>Browser location lookup that fills the map and address form</li>
+                <li>Street and terrain map modes for lot inspection</li>
+                <li>Garden polygon drawing directly on the live map</li>
+                <li>First-pass sun classes and seasonal exposure summaries for drawn zones</li>
+                <li>Garden zones saved to the current property record and restored when the property is reopened</li>
+                <li>Recent saved garden plans can reopen directly from the shared property library</li>
+                <li>First-pass planting guidance tied to each saved zone's exposure profile</li>
+                <li>Property climate context, estimated hardiness band, average temperature and humidity, and live irradiance on the active garden plan</li>
+                <li>First obstruction-aware property context using nearby building footprints and terrain cues, saved with the property and rendered on the garden map</li>
+              </ul>
+            </section>
+
+            <section class="history-group history-group-next">
+              <h3>Committed next</h3>
+              <ul>
+                <li>Extend the saved yard context toward repeat-use planning and later automation</li>
+                <li>Push beyond the current building-and-terrain slice into stronger parcel or canopy-aware shade context</li>
+              </ul>
+            </section>
+
+            <section class="history-group history-group-later">
+              <h3>Later, not committed</h3>
+              <ul>
+                <li>Tree-perfect shade simulation in the first release</li>
+                <li>Sensor automation before saved property context exists</li>
+                <li>Premium canopy and terrain enrichment on every property</li>
+              </ul>
+            </section>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

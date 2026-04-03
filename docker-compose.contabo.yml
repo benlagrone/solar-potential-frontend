@@ -1,0 +1,12 @@
+services:
+  solar-buddy-frontend:
+    image: ${SOLAR_BUDDY_IMAGE}
+    container_name: solar-buddy-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SOLAR_BUDDY_HOST_PORT:-18030}:80"
+    environment:
+      APP_API_BASE_URL: ${APP_API_BASE_URL:-}
+      APP_GA_MEASUREMENT_ID: ${APP_GA_MEASUREMENT_ID:-}
+      APP_DEMO_MODE: ${APP_DEMO_MODE:-true}
+      APP_SECONDARY_FRONTEND_URL: ${APP_SECONDARY_FRONTEND_URL:-}

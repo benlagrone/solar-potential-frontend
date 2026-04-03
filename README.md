@@ -1,70 +1,47 @@
-# Getting Started with Create React App
+# Solar Buddy Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Modern Vite/React frontend for the solar estimate flow.
 
-## Available Scripts
+## Canonical Repo
 
-In the project directory, you can run:
+This repository is the canonical Solar Buddy frontend.
+If a sibling `solar-potential-frontend` directory exists in the workspace, treat it as legacy and
+ignore it for current frontend changes.
 
-### `npm start`
+## Run
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+1. Install dependencies:
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+```bash
+npm install
+```
 
-### `npm test`
+2. Point the app at the backend:
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+```bash
+cp .env.example .env.local
+```
 
-### `npm run build`
+3. Start the dev server:
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+```bash
+npm run dev
+```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+The app expects the backend API at `VITE_API_BASE_URL`.
+If `VITE_API_BASE_URL` is left unset, the app uses same-origin `/api`, and Vite proxies those
+requests to `http://localhost:8000` during local development so the deployed path and local path
+match.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## Demo Mode
 
-### `npm run eject`
+Set `VITE_DEMO_MODE=true` in local development if you want the app to return mock solar data without a running backend.
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+## Analytics
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+Google Analytics is currently loaded from the hardcoded GA4 snippet in
+`solar-buddy-frontend/index.html` using measurement ID `G-SZRJSTZBSV`.
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+## Container Deploy
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+This frontend now includes a production `Dockerfile` and nginx runtime config support. See [RUNBOOK.md](/Users/benjaminlagrone/Documents/projects/solar-potential/RUNBOOK.md) for the Contabo deployment path and domain-pointing steps.
