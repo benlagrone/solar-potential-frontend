@@ -1,5 +1,3 @@
-import { cropCatalog } from "../data/cropCatalog.js";
-
 function round(value, digits = 1) {
   const scale = 10 ** digits;
   return Math.round(value * scale) / scale;
@@ -340,6 +338,10 @@ function buildCropDetail(crop, seasonProfile, seasonId, context, sunFit, perenni
   return unique(details).join(" ");
 }
 
+function normalizeCropCatalog(catalogPayload) {
+  return Array.isArray(catalogPayload?.crops) ? catalogPayload.crops : [];
+}
+
 function scoreCropForSeason(crop, seasonId, context) {
   const seasonProfile = crop.seasonalFit?.[seasonId];
 
@@ -404,7 +406,7 @@ function scoreCropForSeason(crop, seasonId, context) {
   };
 }
 
-function buildSeasonPlan(seasonId, label, context) {
+function buildSeasonPlan(seasonId, label, context, cropCatalog) {
   const crops = cropCatalog
     .map((crop) => scoreCropForSeason(crop, seasonId, context))
     .filter(Boolean)
@@ -428,7 +430,7 @@ function buildSeasonPlan(seasonId, label, context) {
   };
 }
 
-function buildPerennialPlan(context) {
+function buildPerennialPlan(context, cropCatalog) {
   const candidates = cropCatalog
     .filter((crop) => isPerennial(crop) && getSunFit(crop, context.sunClassId))
     .map((crop) => {
@@ -489,11 +491,12 @@ function buildPerennialPlan(context) {
   };
 }
 
-function buildSeasonalPlans(zone, climate) {
+function buildSeasonalPlans(zone, climate, catalogPayload) {
   const hardinessLabel = climate?.hardiness_zone?.label || null;
   const hardinessValue = parseHardinessZone(hardinessLabel);
   const climateBand = getClimateBand(hardinessValue);
   const sunClassId = zone.analysis?.sunClass?.id || "part-sun";
+  const cropCatalog = normalizeCropCatalog(catalogPayload);
   const context = {
     climateBand,
     hardinessLabel,
@@ -501,26 +504,37 @@ function buildSeasonalPlans(zone, climate) {
     sunClassId,
   };
 
+  if (!cropCatalog.length) {
+    return {
+      zoneSummary: buildZoneSummary(hardinessLabel, climateBand, sunClassId),
+      seasonModelNote:
+        "The persisted crop catalog has not loaded yet, so this view is limited to light and climate guidance.",
+      seasons: [],
+      perennials: null,
+    };
+  }
+
   return {
     zoneSummary: buildZoneSummary(hardinessLabel, climateBand, sunClassId),
     seasonModelNote:
+      catalogPayload?.model_note ||
       "This crop catalog is zone-aware and season-aware, but exact sowing and transplant dates still need local frost and soil-temperature calibration.",
     seasons: [
-      buildSeasonPlan("spring", "Spring start", context),
-      buildSeasonPlan("summer", "Summer bed", context),
-      buildSeasonPlan("fall", "Fall reset", context),
+      buildSeasonPlan("spring", "Spring start", context, cropCatalog),
+      buildSeasonPlan("summer", "Summer bed", context, cropCatalog),
+      buildSeasonPlan("fall", "Fall reset", context, cropCatalog),
     ].filter(Boolean),
-    perennials: buildPerennialPlan(context),
+    perennials: buildPerennialPlan(context, cropCatalog),
   };
 }
 
-export function buildPlantingGuidance(zone, climate = null) {
+export function buildPlantingGuidance(zone, climate = null, catalogPayload = null) {
   if (!zone?.analysis?.sunClass?.id) {
     return null;
   }
 
   const preset = guidanceBySunClass[zone.analysis.sunClass.id] || guidanceBySunClass.shade;
-  const seasonalPlans = buildSeasonalPlans(zone, climate);
+  const seasonalPlans = buildSeasonalPlans(zone, climate, catalogPayload);
 
   return {
     headline: preset.headline,
@@ -535,5 +549,6 @@ export function buildPlantingGuidance(zone, climate = null) {
     seasonModelNote: seasonalPlans.seasonModelNote,
     seasonPlans: seasonalPlans.seasons,
     perennialPlan: seasonalPlans.perennials,
+    catalogVersion: catalogPayload?.version || null,
   };
 }

@@ -1147,6 +1147,21 @@ export async function fetchSurfaceIrradiance(coordinates) {
   return request("/api/surface-irradiance", coordinates);
 }
 
+export async function fetchGardenCropCatalog() {
+  if (demoMode) {
+    return {
+      catalog_id: "demo-unavailable",
+      version: "unavailable",
+      model_note:
+        "Garden crop catalog persistence is only available when the backend API is running.",
+      source_basis: [],
+      crops: [],
+    };
+  }
+
+  return request("/api/garden-crop-catalog", {});
+}
+
 export async function fetchPropertyClimate(coordinates) {
   if (demoMode) {
     return buildDemoPropertyClimate(coordinates);

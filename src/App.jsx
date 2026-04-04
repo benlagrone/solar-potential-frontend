@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import PropertyMap from "./components/PropertyMap.jsx";
 import {
   createSolarQuote,
+  fetchGardenCropCatalog,
   fetchPropertyClimate,
   fetchPropertyContext,
   findPropertyRecordByAddress,
@@ -56,7 +57,7 @@ const initialForm = {
 const modeContentByMode = {
   solar: {
     resultPanelCopy:
-      "Estimate output uses the saved roof selection, monthly solar resource data, and the current system inputs.",
+      "Estimate output uses the saved roof selection, roof-facing assumptions from the drawn plane, first-pass site context, and the current system inputs.",
   },
   garden: {
     resultPanelCopy:
@@ -167,6 +168,23 @@ function formatLabel(value) {
   return String(value || "unknown")
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function getCompassDirection(azimuth) {
+  if (typeof azimuth !== "number" || Number.isNaN(azimuth)) {
+    return "unknown";
+  }
+
+  const directions = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
+  return directions[Math.round((((azimuth % 360) + 360) % 360) / 45) % directions.length];
+}
+
+function formatAzimuthLabel(azimuth) {
+  if (typeof azimuth !== "number" || Number.isNaN(azimuth)) {
+    return "N/A";
+  }
+
+  return `${formatLabel(getCompassDirection(azimuth))} ${formatNumber(azimuth, 0)}°`;
 }
 
 function formatAddressLine(address) {
@@ -1261,8 +1279,8 @@ function GardenZoneSelector({ zones, selectedZoneId, onSelect }) {
   );
 }
 
-function GardenPlantingGuidance({ zone, climate }) {
-  const guidance = buildPlantingGuidance(zone, climate);
+function GardenPlantingGuidance({ zone, climate, catalog, catalogLoading, catalogError }) {
+  const guidance = buildPlantingGuidance(zone, climate, catalog);
 
   if (!guidance) {
     return null;
@@ -1326,6 +1344,9 @@ function GardenPlantingGuidance({ zone, climate }) {
         <strong>Use hardiness to choose crop types, then use light to place them</strong>
         <p>{guidance.zoneSummary}</p>
         <p>{guidance.seasonModelNote}</p>
+        {catalogLoading ? <p>Loading persisted crop catalog.</p> : null}
+        {catalogError ? <p>{catalogError}</p> : null}
+        {guidance.catalogVersion ? <p>Catalog version {guidance.catalogVersion} served by the backend.</p> : null}
       </article>
 
       {guidance.seasonPlans.length || guidance.perennialPlan ? (
@@ -1414,6 +1435,9 @@ export default function App() {
   const [propertyClimate, setPropertyClimate] = useState(null);
   const [propertyClimateLoading, setPropertyClimateLoading] = useState(false);
   const [propertyClimateError, setPropertyClimateError] = useState("");
+  const [gardenCropCatalog, setGardenCropCatalog] = useState(null);
+  const [gardenCropCatalogLoading, setGardenCropCatalogLoading] = useState(false);
+  const [gardenCropCatalogError, setGardenCropCatalogError] = useState("");
   const [savedGardenPlans, setSavedGardenPlans] = useState([]);
   const [savedGardenPlansLoading, setSavedGardenPlansLoading] = useState(false);
   const [savedGardenPlansError, setSavedGardenPlansError] = useState("");
@@ -1599,7 +1623,7 @@ export default function App() {
       return;
     }
 
-    if (!isGardenPage) {
+    if (!isGardenPage && !isSolarPage) {
       return;
     }
 
@@ -1674,6 +1698,7 @@ export default function App() {
     };
   }, [
     isGardenPage,
+    isSolarPage,
     form.address,
     gardenZones,
     propertyContext,
@@ -1733,6 +1758,47 @@ export default function App() {
       cancelled = true;
     };
   }, [isGardenPage, propertyPreview?.latitude, propertyPreview?.longitude]);
+
+  useEffect(() => {
+    if (!isGardenPage) {
+      return;
+    }
+
+    let cancelled = false;
+
+    setGardenCropCatalogLoading(true);
+    setGardenCropCatalogError("");
+
+    fetchGardenCropCatalog()
+      .then((nextCatalog) => {
+        if (cancelled) {
+          return;
+        }
+
+        setGardenCropCatalog(nextCatalog);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        setGardenCropCatalog(null);
+        setGardenCropCatalogError(
+          error?.message || "Unable to load the persisted garden crop catalog.",
+        );
+      })
+      .finally(() => {
+        if (cancelled) {
+          return;
+        }
+
+        setGardenCropCatalogLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isGardenPage]);
 
   useEffect(() => {
     if (!isGardenPage) {
@@ -2168,6 +2234,16 @@ export default function App() {
       return;
     }
 
+    if (propertyContextLoading && !propertyContext) {
+      setEstimateError("Solar site context is still loading. Try again in a moment.");
+      return;
+    }
+
+    if (propertyRecordSaving) {
+      setEstimateError("Property context is still saving. Try again in a moment.");
+      return;
+    }
+
     if (!propertyRecordGuid) {
       setEstimateError("Property context is still saving. Try again in a moment.");
       return;
@@ -2503,6 +2579,28 @@ export default function App() {
             </div>
           ) : null}
 
+          {isSolarPage && propertyPreview ? (
+            <div className={`status-card ${propertyContextLoading && !propertyContext ? "status-card-muted" : ""}`}>
+              <span className="status-label">Solar site context</span>
+              <strong>
+                {propertyContextLoading && !propertyContext
+                  ? "Loading nearby building and terrain context"
+                  : propertyContext
+                    ? "Solar context ready"
+                    : propertyContextError
+                      ? "Solar context unavailable"
+                      : "Generic context fallback"}
+              </strong>
+              <p>
+                {propertyContext
+                  ? `${propertyContext.summary} Solar production now uses this context when it refines tilt, roof-facing assumptions, and site losses.`
+                  : propertyContextError
+                    ? propertyContextError
+                    : "The estimate will use generic site assumptions until nearby building and terrain context is available."}
+              </p>
+            </div>
+          ) : null}
+
           {isGardenPage ? (
             <div className="guidance-stack">
               <article className="guidance-card">
@@ -2594,6 +2692,33 @@ export default function App() {
                       }
                     />
                     <StatCard
+                      label="Modeled roof plane"
+                      value={
+                        result.production_model?.assumed_tilt != null &&
+                        result.production_model?.assumed_azimuth != null
+                          ? `${formatNumber(result.production_model.assumed_tilt, 0)}° tilt`
+                          : "Generic fallback"
+                      }
+                      detail={
+                        result.production_model?.assumed_azimuth != null
+                          ? `${formatAzimuthLabel(result.production_model.assumed_azimuth)} azimuth`
+                          : "Roof-facing assumptions unavailable."
+                      }
+                    />
+                    <StatCard
+                      label="Site context"
+                      value={
+                        result.production_model?.site_context_available
+                          ? formatLabel(result.production_model?.obstruction_risk || "active")
+                          : "Generic fallback"
+                      }
+                      detail={
+                        result.production_model?.site_context_available
+                          ? `${formatNumber(result.production_model?.modeled_site_losses_percent || 0, 1)}% modeled site losses`
+                          : "No saved building and terrain context yet."
+                      }
+                    />
+                    <StatCard
                       label="Roof area"
                       value={
                         result.roof_area_square_feet
@@ -2680,6 +2805,31 @@ export default function App() {
                               0,
                             )}
                             % panel efficiency.
+                          </p>
+                        </div>
+                        <div className="status-row">
+                          <strong>Roof-facing inputs</strong>
+                          <p>
+                            The model is using{" "}
+                            {result.production_model?.assumed_tilt != null
+                              ? `${formatNumber(result.production_model.assumed_tilt, 0)}° tilt`
+                              : "a generic tilt fallback"}{" "}
+                            from {result.production_model?.tilt_source || "fallback logic"} and{" "}
+                            {result.production_model?.assumed_azimuth != null
+                              ? formatAzimuthLabel(result.production_model.assumed_azimuth)
+                              : "a generic azimuth fallback"}{" "}
+                            from {result.production_model?.azimuth_source || "fallback logic"}.
+                          </p>
+                        </div>
+                        <div className="status-row">
+                          <strong>Site context</strong>
+                          <p>
+                            {result.production_model?.site_context_available
+                              ? `${result.production_model?.site_context_summary || "Nearby building and terrain context is active for this property."} That adds about ${formatNumber(
+                                  result.production_model?.modeled_site_losses_percent || 0,
+                                  1,
+                                )}% extra modeled site losses in this planning pass.`
+                              : "Nearby building and terrain context has not been saved for this property yet, so the model is still using generic site losses."}
                           </p>
                         </div>
                         <div className="status-row">
@@ -2972,6 +3122,9 @@ export default function App() {
                       <GardenPlantingGuidance
                         zone={selectedGardenZone}
                         climate={propertyClimate}
+                        catalog={gardenCropCatalog}
+                        catalogLoading={gardenCropCatalogLoading}
+                        catalogError={gardenCropCatalogError}
                       />
                     </>
                   ) : null}
