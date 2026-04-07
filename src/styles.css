@@ -552,6 +552,86 @@ button {
   margin: 0 0 18px;
 }
 
+.live-data-toolbar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  margin: 0 0 18px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(20, 32, 51, 0.08);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.live-data-copy {
+  display: grid;
+  gap: 6px;
+  min-width: min(100%, 320px);
+  flex: 1 1 320px;
+}
+
+.live-data-badges {
+  margin-bottom: 2px;
+}
+
+.live-data-note,
+.live-data-subnote,
+.live-data-warning {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.live-data-note,
+.live-data-subnote {
+  color: var(--text-muted);
+}
+
+.live-data-subnote {
+  font-size: 0.88rem;
+}
+
+.live-data-warning {
+  color: var(--error);
+  font-weight: 700;
+}
+
+.live-refresh-button {
+  min-width: 140px;
+}
+
+.reason-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.reason-row {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(20, 32, 51, 0.08);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.reason-row-heading {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reason-row strong {
+  margin: 0;
+}
+
+.reason-row p {
+  margin: 0;
+}
+
 .garden-guidance-section {
   display: grid;
   gap: 14px;
@@ -957,8 +1037,8 @@ button {
 
 .property-map {
   width: 100%;
-  height: min(58vh, 520px);
-  min-height: 360px;
+  height: min(72vh, 680px);
+  min-height: 440px;
 }
 
 .map-note-row {
@@ -1166,6 +1246,6 @@ button {
   }
 
   .property-map {
-    min-height: 300px;
+    min-height: 320px;
   }
 }

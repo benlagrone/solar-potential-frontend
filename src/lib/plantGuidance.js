@@ -41,6 +41,247 @@ function getClimateBand(hardinessValue) {
   return "middle";
 }
 
+function formatMonthDayLabel(monthDay) {
+  if (!monthDay) {
+    return null;
+  }
+
+  const [month, day] = String(monthDay)
+    .split("-")
+    .map((value) => Number(value));
+  if (!month || !day) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(2001, month - 1, day)));
+}
+
+function shiftMonthDay(monthDay, offsetDays) {
+  if (!monthDay) {
+    return null;
+  }
+
+  const [month, day] = String(monthDay)
+    .split("-")
+    .map((value) => Number(value));
+  if (!month || !day) {
+    return null;
+  }
+
+  const nextDate = new Date(Date.UTC(2001, month - 1, day + offsetDays));
+  return `${String(nextDate.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    nextDate.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+function buildDateWindowLabel(anchorMonthDay, startOffsetDays, endOffsetDays) {
+  if (!anchorMonthDay) {
+    return null;
+  }
+
+  const startMonthDay = shiftMonthDay(anchorMonthDay, startOffsetDays);
+  const endMonthDay = shiftMonthDay(anchorMonthDay, endOffsetDays);
+  const startLabel = formatMonthDayLabel(startMonthDay);
+  const endLabel = formatMonthDayLabel(endMonthDay);
+
+  if (!startLabel || !endLabel) {
+    return null;
+  }
+
+  if (startLabel === endLabel) {
+    return startLabel;
+  }
+
+  return `${startLabel} to ${endLabel}`;
+}
+
+function getFrostReference(frostWindow, key) {
+  return frostWindow?.[key]?.median_month_day || null;
+}
+
+function resolveSpringTimingProfile(crop) {
+  switch (crop.id) {
+    case "tomato":
+      return { verb: "Set transplants", startOffsetDays: 7, endOffsetDays: 21 };
+    case "pepper":
+    case "eggplant":
+      return { verb: "Set transplants", startOffsetDays: 14, endOffsetDays: 28 };
+    case "okra":
+      return { verb: "Direct sow or transplant", startOffsetDays: 14, endOffsetDays: 28 };
+    case "melon":
+      return { verb: "Plant", startOffsetDays: 7, endOffsetDays: 21 };
+    case "cucumber":
+    case "summer-squash":
+    case "bush-bean":
+    case "pole-bean":
+    case "sweet-corn":
+    case "basil":
+      return { verb: "Plant", startOffsetDays: 0, endOffsetDays: 14 };
+    case "lettuce":
+    case "spinach":
+    case "cilantro":
+      return { verb: "Direct sow or set starts", startOffsetDays: -42, endOffsetDays: -14 };
+    case "radish":
+      return { verb: "Direct sow", startOffsetDays: -28, endOffsetDays: -7 };
+    case "peas":
+      return { verb: "Direct sow", startOffsetDays: -42, endOffsetDays: -28 };
+    case "broccoli":
+    case "cabbage":
+      return { verb: "Set transplants", startOffsetDays: -35, endOffsetDays: -14 };
+    case "kale":
+      return { verb: "Direct sow or transplant", startOffsetDays: -28, endOffsetDays: 0 };
+    case "carrot":
+    case "beet":
+      return { verb: "Direct sow", startOffsetDays: -28, endOffsetDays: 0 };
+    case "parsley":
+      return { verb: "Set starts", startOffsetDays: -21, endOffsetDays: 14 };
+    case "rosemary":
+      return { verb: "Plant", startOffsetDays: 7, endOffsetDays: 28 };
+    case "sage":
+    case "lavender":
+    case "fig":
+    case "artichoke":
+      return { verb: "Plant", startOffsetDays: 0, endOffsetDays: 21 };
+    default:
+      if (crop.lifecycle === "perennial") {
+        return { verb: "Plant or divide", startOffsetDays: -14, endOffsetDays: 21 };
+      }
+
+      if (crop.heatProfile === "cool-season") {
+        return { verb: "Plant", startOffsetDays: -28, endOffsetDays: -7 };
+      }
+
+      if (crop.heatProfile === "warm-season" || crop.heatProfile === "long-season") {
+        return { verb: "Plant", startOffsetDays: 7, endOffsetDays: 21 };
+      }
+
+      return null;
+  }
+}
+
+function resolveFallTimingProfile(crop) {
+  switch (crop.id) {
+    case "lettuce":
+    case "spinach":
+    case "cilantro":
+      return { verb: "Sow or set starts", startOffsetDays: -56, endOffsetDays: -28 };
+    case "kale":
+      return { verb: "Set starts", startOffsetDays: -84, endOffsetDays: -42 };
+    case "broccoli":
+    case "cabbage":
+      return { verb: "Set transplants", startOffsetDays: -98, endOffsetDays: -56 };
+    case "carrot":
+      return { verb: "Direct sow", startOffsetDays: -84, endOffsetDays: -56 };
+    case "beet":
+      return { verb: "Direct sow", startOffsetDays: -70, endOffsetDays: -42 };
+    case "radish":
+      return { verb: "Direct sow", startOffsetDays: -42, endOffsetDays: -14 };
+    case "peas":
+      return { verb: "Direct sow", startOffsetDays: -70, endOffsetDays: -49 };
+    case "parsley":
+    case "chives":
+    case "mint":
+    case "thyme":
+    case "sage":
+    case "lavender":
+    case "asparagus":
+    case "rhubarb":
+    case "strawberry":
+    case "blueberry":
+      return { verb: "Plant or divide", startOffsetDays: -42, endOffsetDays: -14 };
+    case "rosemary":
+    case "fig":
+    case "artichoke":
+      return { verb: "Plant", startOffsetDays: -42, endOffsetDays: -21 };
+    case "bush-bean":
+      return { verb: "Direct sow", startOffsetDays: -70, endOffsetDays: -49 };
+    case "cucumber":
+      return { verb: "Direct sow or set starts", startOffsetDays: -84, endOffsetDays: -56 };
+    case "okra":
+      return { verb: "Plant", startOffsetDays: -98, endOffsetDays: -70 };
+    default:
+      if (crop.heatProfile === "cool-season") {
+        return { verb: "Plant", startOffsetDays: -56, endOffsetDays: -28 };
+      }
+
+      if (crop.lifecycle === "perennial") {
+        return { verb: "Plant", startOffsetDays: -42, endOffsetDays: -14 };
+      }
+
+      return null;
+  }
+}
+
+function buildCropTimingWindow(crop, seasonId, frostWindow) {
+  if (!frostWindow) {
+    return null;
+  }
+
+  if (seasonId === "spring") {
+    const profile = resolveSpringTimingProfile(crop);
+    if (!profile) {
+      return null;
+    }
+    const anchor = getFrostReference(frostWindow, "last_spring_frost");
+    const windowLabel = buildDateWindowLabel(
+      anchor,
+      profile.startOffsetDays,
+      profile.endOffsetDays,
+    );
+    if (!windowLabel) {
+      return null;
+    }
+
+    return `${profile.verb} around ${windowLabel}, using the typical last spring frost near ${
+      frostWindow?.last_spring_frost?.median_label || "that frost line"
+    }.`;
+  }
+
+  if (seasonId === "summer") {
+    const profile = resolveSpringTimingProfile(crop);
+    if (!profile) {
+      return null;
+    }
+    const anchor = getFrostReference(frostWindow, "last_spring_frost");
+    const windowLabel = buildDateWindowLabel(
+      anchor,
+      profile.startOffsetDays,
+      profile.endOffsetDays,
+    );
+    if (!windowLabel) {
+      return null;
+    }
+
+    return `${profile.verb} around ${windowLabel}, then let it carry the main summer bed.`;
+  }
+
+  if (seasonId === "fall") {
+    const profile = resolveFallTimingProfile(crop);
+    if (!profile) {
+      return null;
+    }
+    const anchor = getFrostReference(frostWindow, "first_fall_frost");
+    const windowLabel = buildDateWindowLabel(
+      anchor,
+      profile.startOffsetDays,
+      profile.endOffsetDays,
+    );
+    if (!windowLabel) {
+      return null;
+    }
+
+    return `${profile.verb} around ${windowLabel}, ahead of the typical first fall frost near ${
+      frostWindow?.first_fall_frost?.median_label || "that frost line"
+    }.`;
+  }
+
+  return null;
+}
+
 function getSunFit(crop, sunClassId) {
   if (crop.sun?.primary?.includes(sunClassId)) {
     return "primary";
@@ -280,6 +521,20 @@ function buildZoneSummary(hardinessLabel, climateBand, sunClassId) {
   return `Estimated hardiness ${hardinessLabel} supports both cool-season succession and several long-season summer crops, but this zone's light class still decides which side of that mix should dominate.`;
 }
 
+function buildFrostSummary(frostWindow) {
+  if (!frostWindow?.sample_years) {
+    return null;
+  }
+
+  const lastSpringFrost = frostWindow?.last_spring_frost?.median_label || "unknown";
+  const firstFallFrost = frostWindow?.first_fall_frost?.median_label || "unknown";
+  const frostFreeDays = frostWindow?.median_frost_free_days;
+
+  return frostFreeDays
+    ? `Typical 32°F frost window runs from about ${lastSpringFrost} to ${firstFallFrost}, leaving roughly ${frostFreeDays} frost-free days.`
+    : `Typical 32°F frost window runs from about ${lastSpringFrost} to ${firstFallFrost}.`;
+}
+
 function buildSeasonSummary(seasonId, climateBand, sunClassId) {
   if (seasonId === "spring") {
     if (climateBand === "cold") {
@@ -306,9 +561,14 @@ function buildSeasonSummary(seasonId, climateBand, sunClassId) {
 
 function buildCropDetail(crop, seasonProfile, seasonId, context, sunFit, perennialStatus) {
   const details = [seasonProfile.action];
+  const timingWindow = buildCropTimingWindow(crop, seasonId, context.frostWindow);
 
   if (sunFit === "secondary") {
     details.push("Needs the brightest pocket of this zone to stay worth the footprint.");
+  }
+
+  if (timingWindow) {
+    details.push(timingWindow);
   }
 
   if (crop.heatProfile === "cool-season" && seasonId === "summer") {
@@ -497,10 +757,12 @@ function buildSeasonalPlans(zone, climate, catalogPayload) {
   const climateBand = getClimateBand(hardinessValue);
   const sunClassId = zone.analysis?.sunClass?.id || "part-sun";
   const cropCatalog = normalizeCropCatalog(catalogPayload);
+  const frostWindow = climate?.frost_window || null;
   const context = {
     climateBand,
     hardinessLabel,
     hardinessValue,
+    frostWindow,
     sunClassId,
   };
 
@@ -515,7 +777,10 @@ function buildSeasonalPlans(zone, climate, catalogPayload) {
   }
 
   return {
-    zoneSummary: buildZoneSummary(hardinessLabel, climateBand, sunClassId),
+    zoneSummary: unique([
+      buildZoneSummary(hardinessLabel, climateBand, sunClassId),
+      buildFrostSummary(frostWindow),
+    ]).join(" "),
     seasonModelNote:
       catalogPayload?.model_note ||
       "This crop catalog is zone-aware and season-aware, but exact sowing and transplant dates still need local frost and soil-temperature calibration.",

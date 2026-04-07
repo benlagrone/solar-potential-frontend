@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import PropertyMap from "./components/PropertyMap.jsx";
 import {
   createSolarQuote,
@@ -424,7 +424,146 @@ function LevelBadge({ label, tone }) {
   return <span className={`soft-badge soft-badge-${getBadgeTone(tone)}`}>{label}</span>;
 }
 
-function SpaceWeatherPanel({ data, loading, error }) {
+function formatDurationWindow(seconds) {
+  if (typeof seconds !== "number" || Number.isNaN(seconds)) {
+    return "unknown";
+  }
+
+  if (seconds <= 90) {
+    return "under 2 min";
+  }
+
+  if (seconds < 3600) {
+    return `about ${Math.round(seconds / 60)} min`;
+  }
+
+  return `about ${Math.round(seconds / 3600)} hr`;
+}
+
+function coordinatesMatch(snapshot, coordinates) {
+  if (!snapshot || !coordinates) {
+    return false;
+  }
+
+  return (
+    Math.abs((snapshot.latitude || 0) - coordinates.latitude) < 0.000001 &&
+    Math.abs((snapshot.longitude || 0) - coordinates.longitude) < 0.000001
+  );
+}
+
+function getFreshnessTone(freshness, error) {
+  if (error) {
+    return "alert";
+  }
+
+  if (freshness?.is_stale) {
+    return "alert";
+  }
+
+  if (freshness?.refresh_failed) {
+    return "watch";
+  }
+
+  return "low";
+}
+
+function getFreshnessLabel(freshness, error) {
+  if (error) {
+    return "Refresh failed";
+  }
+
+  if (freshness?.is_stale) {
+    return "Stale data";
+  }
+
+  if (freshness?.refresh_failed) {
+    return "Cached fallback";
+  }
+
+  return "Fresh data";
+}
+
+function getFreshnessMessage(freshness) {
+  if (!freshness) {
+    return "Freshness metadata is not available yet.";
+  }
+
+  const sourceLabel =
+    freshness.source_count > 1 ? `${freshness.source_count} feeds` : "Feed";
+  const refreshedAt = freshness.fetched_at ? formatDateTime(freshness.fetched_at) : "recently";
+
+  if (freshness.is_stale) {
+    return `${sourceLabel} last refreshed ${refreshedAt}. The cache window has expired, so refresh is recommended.`;
+  }
+
+  if (freshness.refresh_failed) {
+    return `${sourceLabel} last refreshed ${refreshedAt}. The last refresh attempt failed, so cached data is being shown.`;
+  }
+
+  const expiryWindow =
+    typeof freshness.seconds_until_expiry === "number"
+      ? ` Cache window closes in ${formatDurationWindow(freshness.seconds_until_expiry)}.`
+      : "";
+  return `${sourceLabel} last refreshed ${refreshedAt}.${expiryWindow}`;
+}
+
+function LiveDataToolbar({ freshness, loading, error, onRefresh }) {
+  return (
+    <div className="live-data-toolbar">
+      <div className="live-data-copy">
+        <div className="condition-badge-row live-data-badges">
+          <LevelBadge
+            label={getFreshnessLabel(freshness, error)}
+            tone={getFreshnessTone(freshness, error)}
+          />
+          {freshness?.source_count ? (
+            <LevelBadge
+              label={`${freshness.source_count} ${freshness.source_count === 1 ? "feed" : "feeds"}`}
+              tone="neutral"
+            />
+          ) : null}
+        </div>
+        <p className="live-data-note">{getFreshnessMessage(freshness)}</p>
+        {error ? <p className="live-data-warning">{error}</p> : null}
+        <p className="live-data-subnote">
+          Auto refresh runs every 2 minutes while this page stays open.
+        </p>
+      </div>
+      {onRefresh ? (
+        <button
+          className="secondary-button live-refresh-button"
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+        >
+          {loading ? "Refreshing..." : "Refresh now"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ReasonList({ reasons, emptyCopy }) {
+  if (!reasons?.length) {
+    return <p>{emptyCopy}</p>;
+  }
+
+  return (
+    <div className="reason-list">
+      {reasons.map((reason) => (
+        <div className="reason-row" key={reason.id || reason.label}>
+          <div className="reason-row-heading">
+            <strong>{reason.label}</strong>
+            <LevelBadge label={formatLabel(reason.tone)} tone={reason.tone} />
+          </div>
+          <p>{reason.detail}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SpaceWeatherPanel({ data, loading, error, onRefresh }) {
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -438,13 +577,13 @@ function SpaceWeatherPanel({ data, loading, error }) {
         </p>
       </div>
 
-      {loading ? (
+      {loading && !data ? (
         <div className="status-card status-card-muted">
           <span className="status-label">Live status</span>
           <strong>Loading space weather</strong>
           <p>Pulling current NOAA and NASA context for this property.</p>
         </div>
-      ) : error ? (
+      ) : error && !data ? (
         <div className="status-card status-card-muted">
           <span className="status-label">Live status</span>
           <strong>Space weather unavailable</strong>
@@ -453,12 +592,24 @@ function SpaceWeatherPanel({ data, loading, error }) {
       ) : data ? (
         <>
           <p className="summary-copy">{data.summary}</p>
+          <LiveDataToolbar
+            freshness={data.freshness}
+            loading={loading}
+            error={error}
+            onRefresh={onRefresh}
+          />
 
           <div className="condition-badge-row">
             <LevelBadge label={`Local ${formatLabel(data.alert_level)}`} tone={data.alert_level} />
             <LevelBadge
               label={data.local?.is_daylight ? "Daylight side" : "Night side"}
               tone={data.local?.is_daylight ? "watch" : "neutral"}
+            />
+            <LevelBadge
+              label={`Viewline ${formatLabel(
+                data.local?.aurora_viewline?.reach_label || data.local?.aurora_viewline?.reach,
+              )}`}
+              tone={data.local?.aurora_viewline?.reach_tone || "neutral"}
             />
             <LevelBadge
               label={`Aurora ${formatLabel(data.local?.aurora_visibility_potential)}`}
@@ -497,6 +648,17 @@ function SpaceWeatherPanel({ data, loading, error }) {
               detail={`24h peak ${data.global?.peak_xray_24h_class || "Unknown"}`}
             />
             <StatCard
+              label="Aurora footprint"
+              value={formatLabel(
+                data.local?.aurora_viewline?.reach_label || data.local?.aurora_viewline?.reach,
+              )}
+              detail={
+                data.local?.aurora_viewline?.distance_to_viewline_km != null
+                  ? `${formatNumber(data.local.aurora_viewline.distance_to_viewline_km, 0)} km to nearest lit footprint`
+                  : data.local?.aurora_viewline?.detail || "Aurora footprint detail unavailable."
+              }
+            />
+            <StatCard
               label="Latitude band"
               value={formatLabel(data.local?.latitude_band)}
               detail={data.local?.ground_radiation_note || "Local impact note unavailable."}
@@ -506,23 +668,13 @@ function SpaceWeatherPanel({ data, loading, error }) {
           <div className="guidance-stack solar-insight-stack">
             <article className="guidance-card">
               <div className="insight-heading">
-                <strong>Local relevance</strong>
+                <strong>Why this matters here</strong>
                 <LevelBadge label={formatLabel(data.alert_level)} tone={data.alert_level} />
               </div>
-              <div className="status-list">
-                <div className="status-row">
-                  <strong>HF radio risk</strong>
-                  <p>{formatLabel(data.local?.hf_radio_risk)}</p>
-                </div>
-                <div className="status-row">
-                  <strong>GNSS risk</strong>
-                  <p>{formatLabel(data.local?.gnss_risk)}</p>
-                </div>
-                <div className="status-row">
-                  <strong>Ground-level note</strong>
-                  <p>{data.local?.ground_radiation_note || "Not available."}</p>
-                </div>
-              </div>
+              <ReasonList
+                reasons={data.reasons}
+                emptyCopy="Local reason details are not available in this response."
+              />
             </article>
 
             <article className="guidance-card">
@@ -575,7 +727,7 @@ function SpaceWeatherPanel({ data, loading, error }) {
   );
 }
 
-function SurfaceIrradiancePanel({ data, loading, error }) {
+function SurfaceIrradiancePanel({ data, loading, error, onRefresh }) {
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -589,13 +741,13 @@ function SurfaceIrradiancePanel({ data, loading, error }) {
         </p>
       </div>
 
-      {loading ? (
+      {loading && !data ? (
         <div className="status-card status-card-muted">
           <span className="status-label">Live status</span>
           <strong>Loading irradiance</strong>
           <p>Pulling current and near-term surface sunlight for this property.</p>
         </div>
-      ) : error ? (
+      ) : error && !data ? (
         <div className="status-card status-card-muted">
           <span className="status-label">Live status</span>
           <strong>Surface irradiance unavailable</strong>
@@ -604,6 +756,12 @@ function SurfaceIrradiancePanel({ data, loading, error }) {
       ) : data ? (
         <>
           <p className="summary-copy">{data.summary}</p>
+          <LiveDataToolbar
+            freshness={data.freshness}
+            loading={loading}
+            error={error}
+            onRefresh={onRefresh}
+          />
 
           <div className="condition-badge-row">
             <LevelBadge label={`Spike ${formatLabel(data.spike_level)}`} tone={data.spike_level} />
@@ -681,24 +839,15 @@ function SurfaceIrradiancePanel({ data, loading, error }) {
             </article>
 
             <article className="guidance-card">
-              <strong>Interpretation</strong>
-              <div className="status-list">
-                <div className="status-row">
-                  <strong>Current intensity</strong>
-                  <p>{formatLabel(data.current?.intensity_level)}</p>
-                </div>
-                <div className="status-row">
-                  <strong>Spike level</strong>
-                  <p>{formatLabel(data.spike_level)}</p>
-                </div>
-                <div className="status-row">
-                  <strong>Why this is separate</strong>
-                  <p>
-                    This measures local surface sunlight behavior. It is not the same signal as
-                    flare or geomagnetic activity.
-                  </p>
-                </div>
-              </div>
+              <strong>Why this matters here</strong>
+              <ReasonList
+                reasons={data.reasons}
+                emptyCopy="Irradiance reason details are not available in this response."
+              />
+              <p className="live-data-subnote">
+                This measures local surface sunlight behavior. It is not the same signal as flare
+                or geomagnetic activity.
+              </p>
             </article>
           </div>
         </>
@@ -800,6 +949,24 @@ function GardenClimatePanel({
               detail={climate.growing_season?.label || "April-September"}
             />
             <StatCard
+              label="Last spring frost"
+              value={climate.frost_window?.last_spring_frost?.median_label || "Unknown"}
+              detail={
+                climate.frost_window?.last_spring_frost?.sample_years
+                  ? `Observed across ${climate.frost_window.last_spring_frost.sample_years} years`
+                  : "Historical frost boundary unavailable"
+              }
+            />
+            <StatCard
+              label="First fall frost"
+              value={climate.frost_window?.first_fall_frost?.median_label || "Unknown"}
+              detail={
+                climate.frost_window?.median_frost_free_days != null
+                  ? `${formatNumber(climate.frost_window.median_frost_free_days, 0)} frost-free days`
+                  : "Growing-window estimate unavailable"
+              }
+            />
+            <StatCard
               label="Daily sun energy"
               value={`${formatNumber(
                 climate.growing_season?.average_daily_shortwave_radiation_kwh_m2 || 0,
@@ -888,6 +1055,14 @@ function GardenClimatePanel({
                   <p>
                     Keep using the selected zone for open-sky light class and monthly sun hours. This
                     climate layer adds property-level temperature, humidity, and seasonal sunlight context.
+                  </p>
+                </div>
+                <div className="status-row">
+                  <strong>Frost timing</strong>
+                  <p>
+                    Planning windows now anchor to the typical last spring frost near{" "}
+                    {climate.frost_window?.last_spring_frost?.median_label || "unknown"} and first
+                    fall frost near {climate.frost_window?.first_fall_frost?.median_label || "unknown"}.
                   </p>
                 </div>
                 <div className="status-row">
@@ -1487,6 +1662,118 @@ export default function App() {
     null;
   const activeModeContent = modeContentByMode[activeBuddy];
   const landingContent = landingContentByPage[activePage];
+  const spaceWeatherRef = useRef(spaceWeather);
+  const surfaceIrradianceRef = useRef(surfaceIrradiance);
+  const spaceWeatherRequestIdRef = useRef(0);
+  const surfaceIrradianceRequestIdRef = useRef(0);
+
+  const loadSurfaceIrradiance = async ({ forceRefresh = false } = {}) => {
+    if (!propertyPreview?.latitude || !propertyPreview?.longitude) {
+      return;
+    }
+
+    const coordinates = {
+      latitude: propertyPreview.latitude,
+      longitude: propertyPreview.longitude,
+    };
+    const requestId = surfaceIrradianceRequestIdRef.current + 1;
+    const isSameCoordinates = coordinatesMatch(surfaceIrradianceRef.current, coordinates);
+
+    surfaceIrradianceRequestIdRef.current = requestId;
+    if (!isSameCoordinates) {
+      setSurfaceIrradiance(null);
+    }
+    setSurfaceIrradianceLoading(true);
+    setSurfaceIrradianceError("");
+
+    try {
+      const nextSurfaceIrradiance = await fetchSurfaceIrradiance(coordinates, {
+        forceRefresh,
+      });
+
+      if (requestId !== surfaceIrradianceRequestIdRef.current) {
+        return;
+      }
+
+      setSurfaceIrradiance(nextSurfaceIrradiance);
+      setSurfaceIrradianceError("");
+    } catch (error) {
+      if (requestId !== surfaceIrradianceRequestIdRef.current) {
+        return;
+      }
+
+      if (!isSameCoordinates) {
+        setSurfaceIrradiance(null);
+      }
+      setSurfaceIrradianceError(
+        error?.message || "Unable to load local surface irradiance conditions.",
+      );
+    } finally {
+      if (requestId !== surfaceIrradianceRequestIdRef.current) {
+        return;
+      }
+
+      setSurfaceIrradianceLoading(false);
+    }
+  };
+
+  const loadSpaceWeather = async ({ forceRefresh = false } = {}) => {
+    if (!propertyPreview?.latitude || !propertyPreview?.longitude) {
+      return;
+    }
+
+    const coordinates = {
+      latitude: propertyPreview.latitude,
+      longitude: propertyPreview.longitude,
+    };
+    const requestId = spaceWeatherRequestIdRef.current + 1;
+    const isSameCoordinates = coordinatesMatch(spaceWeatherRef.current, coordinates);
+
+    spaceWeatherRequestIdRef.current = requestId;
+    if (!isSameCoordinates) {
+      setSpaceWeather(null);
+    }
+    setSpaceWeatherLoading(true);
+    setSpaceWeatherError("");
+
+    try {
+      const nextSpaceWeather = await fetchSpaceWeather(coordinates, {
+        forceRefresh,
+      });
+
+      if (requestId !== spaceWeatherRequestIdRef.current) {
+        return;
+      }
+
+      setSpaceWeather(nextSpaceWeather);
+      setSpaceWeatherError("");
+    } catch (error) {
+      if (requestId !== spaceWeatherRequestIdRef.current) {
+        return;
+      }
+
+      if (!isSameCoordinates) {
+        setSpaceWeather(null);
+      }
+      setSpaceWeatherError(
+        error?.message || "Unable to load live space-weather conditions.",
+      );
+    } finally {
+      if (requestId !== spaceWeatherRequestIdRef.current) {
+        return;
+      }
+
+      setSpaceWeatherLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    spaceWeatherRef.current = spaceWeather;
+  }, [spaceWeather]);
+
+  useEffect(() => {
+    surfaceIrradianceRef.current = surfaceIrradiance;
+  }, [surfaceIrradiance]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1519,54 +1806,25 @@ export default function App() {
 
   useEffect(() => {
     if (!propertyPreview?.latitude || !propertyPreview?.longitude) {
+      surfaceIrradianceRequestIdRef.current += 1;
       setSurfaceIrradiance(null);
       setSurfaceIrradianceLoading(false);
       setSurfaceIrradianceError("");
       return;
     }
 
-    let cancelled = false;
-    const coordinates = {
-      latitude: propertyPreview.latitude,
-      longitude: propertyPreview.longitude,
-    };
+    if (!isGardenPage && !isSpaceWeatherPage) {
+      surfaceIrradianceRequestIdRef.current += 1;
+      setSurfaceIrradianceLoading(false);
+      return;
+    }
 
-    setSurfaceIrradianceLoading(true);
-    setSurfaceIrradianceError("");
-
-    fetchSurfaceIrradiance(coordinates)
-      .then((nextSurfaceIrradiance) => {
-        if (cancelled) {
-          return;
-        }
-
-        setSurfaceIrradiance(nextSurfaceIrradiance);
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-
-        setSurfaceIrradiance(null);
-        setSurfaceIrradianceError(
-          error?.message || "Unable to load local surface irradiance conditions.",
-        );
-      })
-      .finally(() => {
-        if (cancelled) {
-          return;
-        }
-
-        setSurfaceIrradianceLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [propertyPreview?.latitude, propertyPreview?.longitude]);
+    loadSurfaceIrradiance();
+  }, [isGardenPage, isSpaceWeatherPage, propertyPreview?.latitude, propertyPreview?.longitude]);
 
   useEffect(() => {
     if (!propertyPreview?.latitude || !propertyPreview?.longitude) {
+      spaceWeatherRequestIdRef.current += 1;
       setSpaceWeather(null);
       setSpaceWeatherLoading(false);
       setSpaceWeatherError("");
@@ -1574,45 +1832,33 @@ export default function App() {
     }
 
     if (!isSpaceWeatherPage) {
+      spaceWeatherRequestIdRef.current += 1;
+      setSpaceWeatherLoading(false);
       return;
     }
 
-    let cancelled = false;
-    const coordinates = {
-      latitude: propertyPreview.latitude,
-      longitude: propertyPreview.longitude,
-    };
+    loadSpaceWeather();
+  }, [isSpaceWeatherPage, propertyPreview?.latitude, propertyPreview?.longitude]);
 
-    setSpaceWeatherLoading(true);
-    setSpaceWeatherError("");
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
 
-    fetchSpaceWeather(coordinates)
-      .then((nextSpaceWeather) => {
-        if (cancelled) {
-          return;
-        }
+    if (!isSpaceWeatherPage || !propertyPreview?.latitude || !propertyPreview?.longitude) {
+      return undefined;
+    }
 
-        setSpaceWeather(nextSpaceWeather);
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
 
-        setSpaceWeather(null);
-        setSpaceWeatherError(error?.message || "Unable to load live space-weather conditions.");
-      })
-      .finally(() => {
-        if (cancelled) {
-          return;
-        }
+      loadSpaceWeather();
+      loadSurfaceIrradiance();
+    }, 120000);
 
-        setSpaceWeatherLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    return () => window.clearInterval(intervalId);
   }, [isSpaceWeatherPage, propertyPreview?.latitude, propertyPreview?.longitude]);
 
   useEffect(() => {
@@ -1719,6 +1965,14 @@ export default function App() {
       return;
     }
 
+    const climateCoordinatesMatch =
+      Math.abs((propertyClimate?.latitude || 0) - propertyPreview.latitude) < 0.000001 &&
+      Math.abs((propertyClimate?.longitude || 0) - propertyPreview.longitude) < 0.000001 &&
+      Boolean(propertyClimate?.frost_window);
+    if (climateCoordinatesMatch) {
+      return;
+    }
+
     let cancelled = false;
     const coordinates = {
       latitude: propertyPreview.latitude,
@@ -1729,12 +1983,35 @@ export default function App() {
     setPropertyClimateError("");
 
     fetchPropertyClimate(coordinates)
-      .then((nextPropertyClimate) => {
+      .then(async (nextPropertyClimate) => {
         if (cancelled) {
           return;
         }
 
         setPropertyClimate(nextPropertyClimate);
+
+        if (!propertyRecordGuid) {
+          return;
+        }
+
+        try {
+          await persistPropertyRecord({
+            guid: propertyRecordGuid,
+            address: propertyPreview.address || form.address,
+            preview: propertyPreview,
+            nextRoofSelection: roofSelection,
+            nextGardenZones: gardenZones,
+            nextPropertyContext: propertyContext,
+            nextPropertyClimate,
+          });
+        } catch (submissionError) {
+          if (!cancelled) {
+            setPropertyClimateError(
+              submissionError.message ||
+                "Climate loaded, but saving it to the property record failed.",
+            );
+          }
+        }
       })
       .catch((error) => {
         if (cancelled) {
@@ -1757,7 +2034,16 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [isGardenPage, propertyPreview?.latitude, propertyPreview?.longitude]);
+  }, [
+    form.address,
+    gardenZones,
+    isGardenPage,
+    propertyClimate,
+    propertyContext,
+    propertyPreview,
+    propertyRecordGuid,
+    roofSelection,
+  ]);
 
   useEffect(() => {
     if (!isGardenPage) {
@@ -1862,11 +2148,13 @@ export default function App() {
     const restoredGardenZones = record?.garden_zones || [];
     const restoredSolarReports = record?.saved_solar_reports || [];
     const restoredPropertyContext = record?.property_context || null;
+    const restoredPropertyClimate = record?.property_climate || null;
 
     setRoofSelection(restoredRoofSelection);
     setGardenZones(restoredGardenZones);
     setSavedSolarReports(restoredSolarReports);
     setPropertyContext(restoredPropertyContext);
+    setPropertyClimate(restoredPropertyClimate);
     setSelectedGardenZoneId((current) => {
       if (!restoredGardenZones.length) {
         return null;
@@ -1916,6 +2204,7 @@ export default function App() {
     nextRoofSelection = roofSelection,
     nextGardenZones = gardenZones,
     nextPropertyContext = propertyContext,
+    nextPropertyClimate = propertyClimate,
   }) {
     setPropertyRecordSaving(true);
 
@@ -1925,11 +2214,13 @@ export default function App() {
         address,
         propertyPreview: preview,
         propertyContext: nextPropertyContext,
+        propertyClimate: nextPropertyClimate,
         roofSelection: nextRoofSelection,
         gardenZones: nextGardenZones,
       });
       setPropertyRecordGuid(savedRecord.guid);
       setPropertyContext(savedRecord.property_context || nextPropertyContext || null);
+      setPropertyClimate(savedRecord.property_climate || nextPropertyClimate || null);
       setSavedSolarReports(savedRecord.saved_solar_reports || []);
       if (isGardenPage || (savedRecord.garden_zones || []).length) {
         void loadSavedGardenPlans({ background: true });
@@ -1976,6 +2267,9 @@ export default function App() {
     setPropertyContext(record?.property_context || null);
     setPropertyContextError("");
     setPropertyContextLoading(false);
+    setPropertyClimate(record?.property_climate || null);
+    setPropertyClimateError("");
+    setPropertyClimateLoading(false);
     hydrateSavedPropertyRecord(record);
   }
 
@@ -3147,6 +3441,9 @@ export default function App() {
               data={spaceWeather}
               loading={spaceWeatherLoading}
               error={spaceWeatherError}
+              onRefresh={() => {
+                loadSpaceWeather({ forceRefresh: true });
+              }}
             />
           ) : null}
 
@@ -3155,6 +3452,9 @@ export default function App() {
               data={surfaceIrradiance}
               loading={surfaceIrradianceLoading}
               error={surfaceIrradianceError}
+              onRefresh={() => {
+                loadSurfaceIrradiance({ forceRefresh: true });
+              }}
             />
           ) : null}
 

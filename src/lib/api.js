@@ -476,6 +476,7 @@ function upsertDemoPropertyRecord({
   address,
   propertyPreview,
   propertyContext,
+  propertyClimate,
   roofSelection,
   gardenZones,
 }) {
@@ -487,6 +488,8 @@ function upsertDemoPropertyRecord({
     property_preview: propertyPreview ?? existingRecord?.property_preview ?? null,
     property_context:
       propertyContext !== undefined ? propertyContext : existingRecord?.property_context ?? null,
+    property_climate:
+      propertyClimate !== undefined ? propertyClimate : existingRecord?.property_climate ?? null,
     roof_selection:
       roofSelection !== undefined ? roofSelection : existingRecord?.roof_selection ?? null,
     garden_zones: gardenZones ?? existingRecord?.garden_zones ?? [],
@@ -718,10 +721,13 @@ function buildDemoBrowserLocationPreview(coordinates) {
 }
 
 function buildDemoSpaceWeather(coordinates) {
+  const now = new Date();
+  const fetchedAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + 60 * 1000).toISOString();
   const seed = Math.abs(
     Math.round((Number(coordinates.latitude || 0) + Number(coordinates.longitude || 0)) * 100),
   );
-  const localHour = new Date().getHours();
+  const localHour = now.getHours();
   const isDaylight = localHour >= 6 && localHour < 18;
   const radioBlackoutScale = seed % 4 === 0 ? 2 : 0;
   const radiationStormScale = seed % 9 === 0 ? 1 : 0;
@@ -737,7 +743,7 @@ function buildDemoSpaceWeather(coordinates) {
     latitude: Number(coordinates.latitude.toFixed(6)),
     longitude: Number(coordinates.longitude.toFixed(6)),
     time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    observed_at: new Date().toISOString(),
+    observed_at: fetchedAt,
     global: {
       radio_blackout_scale: {
         scale: radioBlackoutScale,
@@ -752,7 +758,7 @@ function buildDemoSpaceWeather(coordinates) {
         label: geomagneticStormScale >= 2 ? "moderate" : geomagneticStormScale >= 1 ? "minor" : "none",
       },
       solar_wind: {
-        observed_at: new Date().toISOString(),
+        observed_at: fetchedAt,
         density_p_cm3: Number((2.2 + (seed % 7) * 0.4).toFixed(2)),
         speed_km_s: Number((405 + (seed % 6) * 18).toFixed(1)),
         temperature_k: 145000 + (seed % 5) * 12000,
@@ -770,6 +776,37 @@ function buildDemoSpaceWeather(coordinates) {
     local: {
       is_daylight: isDaylight,
       latitude_band: Math.abs(coordinates.latitude) >= 40 ? "mid" : "low",
+      aurora_viewline: {
+        source: "demo",
+        forecast_status: "available",
+        basis: "ovation-footprint-inference",
+        local_aurora_value: !isDaylight && geomagneticStormScale >= 2 ? 6 : 0,
+        distance_to_viewline_km:
+          !isDaylight && geomagneticStormScale >= 2
+            ? 420
+            : Math.abs(coordinates.latitude) >= 45
+              ? 820
+              : 1680,
+        southern_edge_latitude: Math.abs(coordinates.latitude) >= 45 ? 42 : 55,
+        reach:
+          !isDaylight && geomagneticStormScale >= 2
+            ? "nearby-viewline"
+            : Math.abs(coordinates.latitude) >= 45
+              ? "distant-viewline"
+              : "far",
+        reach_label:
+          !isDaylight && geomagneticStormScale >= 2
+            ? "nearby viewline"
+            : Math.abs(coordinates.latitude) >= 45
+              ? "distant viewline"
+              : "far",
+        reach_tone: !isDaylight && geomagneticStormScale >= 2 ? "watch" : "low",
+        visibility: !isDaylight && geomagneticStormScale >= 2 ? "possible" : "low",
+        detail:
+          !isDaylight && geomagneticStormScale >= 2
+            ? "The NOAA-style aurora footprint sits close enough to this longitude band that darker skies could matter tonight."
+            : "The current aurora footprint stays poleward of this property in demo mode.",
+      },
       aurora_visibility_potential:
         !isDaylight && geomagneticStormScale >= 2 ? "possible" : "low",
       hf_radio_risk:
@@ -781,6 +818,69 @@ function buildDemoSpaceWeather(coordinates) {
     alert_count: radiationStormScale >= 1 ? 1 : 0,
     watch_count: geomagneticStormScale >= 2 ? 1 : 0,
     warning_count: radioBlackoutScale >= 2 ? 1 : 0,
+    freshness: {
+      status: "fresh",
+      checked_at: fetchedAt,
+      fetched_at: fetchedAt,
+      latest_fetched_at: fetchedAt,
+      expires_at: expiresAt,
+      age_seconds: 0,
+      seconds_until_expiry: 60,
+      is_stale: false,
+      refresh_failed: false,
+      source_count: 1,
+      sources: {
+        demo: {
+          source: "demo",
+          status: "fresh",
+          fetched_at: fetchedAt,
+          expires_at: expiresAt,
+          ttl_seconds: 60,
+          age_seconds: 0,
+          seconds_until_expiry: 60,
+          is_stale: false,
+          cache_hit: false,
+          refresh_failed: false,
+        },
+      },
+    },
+    reasons: [
+      {
+        id: "daylight-side",
+        label: isDaylight ? "Daylight side" : "Night side",
+        tone: isDaylight && radioBlackoutScale >= 2 ? "moderate" : "neutral",
+        detail: isDaylight
+          ? "This property is on the daylight side, so flare-driven radio blackout effects matter more locally."
+          : "This property is on the night side, so flare-driven radio blackout effects are muted locally.",
+      },
+      {
+        id: "latitude-band",
+        label: `Latitude ${Math.abs(coordinates.latitude) >= 40 ? "mid" : "low"}`,
+        tone: geomagneticStormScale >= 2 ? "watch" : "neutral",
+        detail:
+          Math.abs(coordinates.latitude) >= 40
+            ? "This latitude band can start to see aurora and GNSS relevance when geomagnetic activity rises."
+            : "This latitude band usually needs stronger geomagnetic conditions before local effects matter.",
+      },
+      {
+        id: "aurora-reach",
+        label: !isDaylight && geomagneticStormScale >= 2 ? "Aurora possible" : "Aurora low",
+        tone: !isDaylight && geomagneticStormScale >= 2 ? "possible" : "low",
+        detail:
+          !isDaylight && geomagneticStormScale >= 2
+            ? "Nighttime geomagnetic conditions could support visible aurora farther south than usual."
+            : "Aurora reach is not a strong local signal at the moment.",
+      },
+      {
+        id: "gnss",
+        label: geomagneticStormScale >= 2 ? "GNSS moderate" : "GNSS low",
+        tone: geomagneticStormScale >= 2 ? "moderate" : "low",
+        detail:
+          geomagneticStormScale >= 2
+            ? "Navigation and timing systems are the main local risk path under these geomagnetic conditions."
+            : "Current geomagnetic conditions do not suggest meaningful local GNSS disruption.",
+      },
+    ],
     recent_headlines:
       alertLevel === "alert"
         ? ["WARNING: Radio blackout conditions are elevated on the sunlit side."]
@@ -813,6 +913,8 @@ function buildDemoSurfaceIrradiance(coordinates) {
     Math.round((Number(coordinates.latitude || 0) * 11 + Number(coordinates.longitude || 0) * 7) * 10),
   );
   const now = new Date();
+  const fetchedAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
   const localHour = now.getHours();
   const isDaylight = localHour >= 6 && localHour < 19;
   const baseGhi = isDaylight ? 280 + (seed % 6) * 90 : 0;
@@ -866,6 +968,63 @@ function buildDemoSurfaceIrradiance(coordinates) {
       dni_w_m2: Number((peakGhi * 0.84).toFixed(1)),
     },
     spike_level: spikeLevel,
+    freshness: {
+      status: "fresh",
+      checked_at: fetchedAt,
+      fetched_at: fetchedAt,
+      latest_fetched_at: fetchedAt,
+      expires_at: expiresAt,
+      age_seconds: 0,
+      seconds_until_expiry: 600,
+      is_stale: false,
+      refresh_failed: false,
+      source_count: 1,
+      sources: {
+        demo: {
+          source: "demo",
+          status: "fresh",
+          fetched_at: fetchedAt,
+          expires_at: expiresAt,
+          ttl_seconds: 600,
+          age_seconds: 0,
+          seconds_until_expiry: 600,
+          is_stale: false,
+          cache_hit: false,
+          refresh_failed: false,
+        },
+      },
+    },
+    reasons: [
+      {
+        id: "daylight",
+        label: isDaylight ? "Daylight" : "Night",
+        tone: isDaylight ? "watch" : "neutral",
+        detail: isDaylight
+          ? "The property is in daylight, so surface sunlight can ramp materially over the next forecast hours."
+          : "It is currently dark at the property, so irradiance remains naturally suppressed until sunrise.",
+      },
+      {
+        id: "current-intensity",
+        label: `Current intensity ${currentGhi >= 700 ? "high" : currentGhi >= 350 ? "moderate" : "low"}`,
+        tone: currentGhi >= 700 ? "high" : currentGhi >= 350 ? "moderate" : "low",
+        detail: `Current global horizontal irradiance is about ${currentGhi.toFixed(0)} W/m².`,
+      },
+      {
+        id: "next-hour-ramp",
+        label: `Next-hour trend ${spikeLevel}`,
+        tone: spikeLevel,
+        detail:
+          nextHourGhi >= currentGhi
+            ? `Forecast sunlight rises by about ${(nextHourGhi - currentGhi).toFixed(0)} W/m² over the next hour.`
+            : `Forecast sunlight eases by about ${(currentGhi - nextHourGhi).toFixed(0)} W/m² over the next hour.`,
+      },
+      {
+        id: "peak-window",
+        label: "Next peak window",
+        tone: spikeLevel,
+        detail: `The next forecast peak is around ${hourlyProfile[Math.min(peakHourOffset, hourlyProfile.length - 1)]?.time || peakDate.toISOString()} near ${peakGhi.toFixed(0)} W/m².`,
+      },
+    ],
     summary:
       !isDaylight
         ? "It is currently dark at this property, so surface irradiance is minimal."
@@ -876,6 +1035,24 @@ function buildDemoSurfaceIrradiance(coordinates) {
             : "Surface sunlight is stable right now for this property.",
     hourly_profile: hourlyProfile,
   };
+}
+
+function buildMonthDayFromDayOfYear(dayOfYear) {
+  const nextDate = new Date(Date.UTC(2001, 0, dayOfYear));
+  return `${String(nextDate.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    nextDate.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+function buildMonthDayLabel(monthDay) {
+  const [month, day] = String(monthDay)
+    .split("-")
+    .map((value) => Number(value));
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(2001, month - 1, day)));
 }
 
 function buildDemoPropertyClimate(coordinates) {
@@ -915,6 +1092,12 @@ function buildDemoPropertyClimate(coordinates) {
       (total, monthKey) => total + monthlyProfiles[monthKey].average_daily_shortwave_radiation_kwh_m2,
       0,
     ) / growingMonths.length;
+  const lastSpringFrostDay = Math.round(clamp(150 - annualTemperatureF * 1.8 + (seed % 11) - 5, 45, 165));
+  const firstFallFrostDay = Math.round(
+    clamp(248 + annualTemperatureF * 1.7 + (seed % 15) - 7, 230, 355),
+  );
+  const lastSpringFrostMonthDay = buildMonthDayFromDayOfYear(lastSpringFrostDay);
+  const firstFallFrostMonthDay = buildMonthDayFromDayOfYear(firstFallFrostDay);
   const monthlyEntries = Object.entries(monthlyProfiles);
   const warmestMonth = monthlyEntries.reduce((current, candidate) =>
     candidate[1].average_temperature_f > current[1].average_temperature_f ? candidate : current,
@@ -950,6 +1133,36 @@ function buildDemoPropertyClimate(coordinates) {
       average_annual_extreme_min_f: Number(averageAnnualExtremeMinF.toFixed(1)),
       range_f: hardiness.range_f,
       estimated: true,
+    },
+    frost_window: {
+      model_version: "frost-window-v1",
+      threshold_f: 32,
+      last_spring_frost: {
+        threshold_f: 32,
+        median_month_day: lastSpringFrostMonthDay,
+        median_label: buildMonthDayLabel(lastSpringFrostMonthDay),
+        median_day_of_year: lastSpringFrostDay,
+        earliest_month_day: buildMonthDayFromDayOfYear(lastSpringFrostDay - 12),
+        earliest_label: buildMonthDayLabel(buildMonthDayFromDayOfYear(lastSpringFrostDay - 12)),
+        latest_month_day: buildMonthDayFromDayOfYear(lastSpringFrostDay + 16),
+        latest_label: buildMonthDayLabel(buildMonthDayFromDayOfYear(lastSpringFrostDay + 16)),
+        sample_years: 10,
+      },
+      first_fall_frost: {
+        threshold_f: 32,
+        median_month_day: firstFallFrostMonthDay,
+        median_label: buildMonthDayLabel(firstFallFrostMonthDay),
+        median_day_of_year: firstFallFrostDay,
+        earliest_month_day: buildMonthDayFromDayOfYear(firstFallFrostDay - 18),
+        earliest_label: buildMonthDayLabel(buildMonthDayFromDayOfYear(firstFallFrostDay - 18)),
+        latest_month_day: buildMonthDayFromDayOfYear(firstFallFrostDay + 14),
+        latest_label: buildMonthDayLabel(buildMonthDayFromDayOfYear(firstFallFrostDay + 14)),
+        sample_years: 10,
+      },
+      median_frost_free_days: firstFallFrostDay - lastSpringFrostDay - 1,
+      confidence: "moderate",
+      sample_years: 10,
+      summary: `Typical last spring frost near ${buildMonthDayLabel(lastSpringFrostMonthDay)} and first fall frost near ${buildMonthDayLabel(firstFallFrostMonthDay)}.`,
     },
     annual: {
       average_temperature_f: Number(annualTemperatureF.toFixed(1)),
@@ -990,7 +1203,7 @@ function buildDemoPropertyClimate(coordinates) {
         shortwave_radiation_kwh_m2: sunniestMonth[1].average_daily_shortwave_radiation_kwh_m2,
       },
     },
-    summary: `Estimated hardiness band ${hardiness.label} using a recent historical window. Average growing-season conditions run about ${averageGrowingSeasonTemperatureF.toFixed(1)}°F and ${averageGrowingSeasonHumidity.toFixed(0)}% relative humidity.`,
+    summary: `Estimated hardiness band ${hardiness.label} using a recent historical window. Average growing-season conditions run about ${averageGrowingSeasonTemperatureF.toFixed(1)}°F and ${averageGrowingSeasonHumidity.toFixed(0)}% relative humidity. Typical last spring frost lands near ${buildMonthDayLabel(lastSpringFrostMonthDay)} and first fall frost near ${buildMonthDayLabel(firstFallFrostMonthDay)}.`,
     model_note:
       "Property-level climate averages from historical weather. This does not model parcel-specific shade, tree canopy, soil, or irrigation conditions.",
   };
@@ -1131,20 +1344,26 @@ export async function reverseGeocodeCoordinates(coordinates) {
   return request("/api/reverse-geocode", coordinates);
 }
 
-export async function fetchSpaceWeather(coordinates) {
+export async function fetchSpaceWeather(coordinates, options = {}) {
   if (demoMode) {
     return buildDemoSpaceWeather(coordinates);
   }
 
-  return request("/api/space-weather", coordinates);
+  return request("/api/space-weather", {
+    ...coordinates,
+    force_refresh: Boolean(options.forceRefresh),
+  });
 }
 
-export async function fetchSurfaceIrradiance(coordinates) {
+export async function fetchSurfaceIrradiance(coordinates, options = {}) {
   if (demoMode) {
     return buildDemoSurfaceIrradiance(coordinates);
   }
 
-  return request("/api/surface-irradiance", coordinates);
+  return request("/api/surface-irradiance", {
+    ...coordinates,
+    force_refresh: Boolean(options.forceRefresh),
+  });
 }
 
 export async function fetchGardenCropCatalog() {
@@ -1197,6 +1416,7 @@ export async function upsertPropertyRecord({
   address,
   propertyPreview,
   propertyContext,
+  propertyClimate,
   roofSelection,
   gardenZones,
 }) {
@@ -1206,6 +1426,7 @@ export async function upsertPropertyRecord({
       address,
       propertyPreview,
       propertyContext,
+      propertyClimate,
       roofSelection,
       gardenZones,
     });
@@ -1216,6 +1437,7 @@ export async function upsertPropertyRecord({
     address,
     property_preview: propertyPreview,
     property_context: propertyContext,
+    property_climate: propertyClimate,
     roof_selection: roofSelection,
     garden_zones: gardenZones,
   });

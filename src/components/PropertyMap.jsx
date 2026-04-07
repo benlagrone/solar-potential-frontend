@@ -16,24 +16,31 @@ import { buildLeafletPositions, normalizeMapPoint } from "../lib/geometry.js";
 const defaultCenter = [39.8283, -98.5795];
 const gardenZonePalette = ["#1f6c5c", "#4a8f6a", "#b8843b", "#346b93"];
 const parcelScaleBoundsThreshold = 0.0009;
+const earthRadiusMeters = 6371000;
+const defaultEnvelopeHalfWidthMeters = 24;
+const defaultEnvelopeHalfHeightMeters = 24;
+const yardScaleEnvelopeMaxWidthMeters = 90;
+const yardScaleEnvelopeMaxHeightMeters = 75;
+const nearestBuildingViewportMaxDistanceMeters = 65;
+const nearestBuildingViewportPaddingMeters = 18;
 
 const mapStyles = {
   streets: {
     label: "Street",
     url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    focusZoom: 18,
+    focusZoom: 22,
     maxNativeZoom: 19,
-    maxZoom: 19,
+    maxZoom: 22,
   },
   terrain: {
     label: "Terrain",
     url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
     attribution:
       'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="https://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
-    focusZoom: 17,
+    focusZoom: 22,
     maxNativeZoom: 17,
-    maxZoom: 17,
+    maxZoom: 22,
   },
 };
 
@@ -54,6 +61,177 @@ function getBoundsMaxSpan(bounds) {
 
 function shouldUsePreviewBounds(preview) {
   return Boolean(preview?.bounds) && getBoundsMaxSpan(preview.bounds) <= parcelScaleBoundsThreshold;
+}
+
+function metersToLatitudeDelta(meters) {
+  return (meters / earthRadiusMeters) * (180 / Math.PI);
+}
+
+function metersToLongitudeDelta(meters, latitude) {
+  const cosine = Math.max(Math.cos((latitude * Math.PI) / 180), 0.2);
+  return (meters / (earthRadiusMeters * cosine)) * (180 / Math.PI);
+}
+
+function buildBoundsArray(bounds) {
+  if (!bounds) {
+    return null;
+  }
+
+  return [
+    [bounds.south, bounds.west],
+    [bounds.north, bounds.east],
+  ];
+}
+
+function buildSyntheticPreviewBounds(preview) {
+  if (!preview?.latitude || !preview?.longitude) {
+    return null;
+  }
+
+  const latitudeDelta = metersToLatitudeDelta(defaultEnvelopeHalfHeightMeters);
+  const longitudeDelta = metersToLongitudeDelta(defaultEnvelopeHalfWidthMeters, preview.latitude);
+
+  return [
+    [preview.latitude - latitudeDelta, preview.longitude - longitudeDelta],
+    [preview.latitude + latitudeDelta, preview.longitude + longitudeDelta],
+  ];
+}
+
+function buildPositionsBounds(positionSets) {
+  let south = Infinity;
+  let north = -Infinity;
+  let west = Infinity;
+  let east = -Infinity;
+
+  positionSets.forEach((positions) => {
+    positions.forEach(([lat, lng]) => {
+      south = Math.min(south, lat);
+      north = Math.max(north, lat);
+      west = Math.min(west, lng);
+      east = Math.max(east, lng);
+    });
+  });
+
+  if (![south, north, west, east].every(Number.isFinite)) {
+    return null;
+  }
+
+  return [
+    [south, west],
+    [north, east],
+  ];
+}
+
+function expandBoundsByMeters(bounds, paddingMeters) {
+  if (!bounds) {
+    return null;
+  }
+
+  const [[south, west], [north, east]] = bounds;
+  const centerLatitude = (south + north) / 2;
+  const latitudeDelta = metersToLatitudeDelta(paddingMeters);
+  const longitudeDelta = metersToLongitudeDelta(paddingMeters, centerLatitude);
+
+  return [
+    [south - latitudeDelta, west - longitudeDelta],
+    [north + latitudeDelta, east + longitudeDelta],
+  ];
+}
+
+function isYardScaleContextEnvelope(propertyContext) {
+  const envelope = propertyContext?.match_envelope;
+  if (!envelope?.bounds) {
+    return false;
+  }
+
+  if (
+    typeof envelope.width_m === "number" &&
+    typeof envelope.height_m === "number"
+  ) {
+    return (
+      envelope.width_m <= yardScaleEnvelopeMaxWidthMeters &&
+      envelope.height_m <= yardScaleEnvelopeMaxHeightMeters
+    );
+  }
+
+  return getBoundsMaxSpan(envelope.bounds) <= parcelScaleBoundsThreshold;
+}
+
+function buildNearestBuildingViewportBounds(preview, propertyContext) {
+  if (!preview?.latitude || !preview?.longitude) {
+    return null;
+  }
+
+  const nearbyBuildings = propertyContext?.building_context?.nearby_buildings || [];
+  if (!nearbyBuildings.length) {
+    return null;
+  }
+
+  const preferredBuildings = nearbyBuildings.filter((building) => {
+    const kind = String(building.kind || "").toLowerCase();
+    return !["garage", "shed", "carport", "service"].includes(kind);
+  });
+  const candidateBuildings = preferredBuildings.length ? preferredBuildings : nearbyBuildings;
+  const closestBuilding = candidateBuildings.reduce((best, candidate) => {
+    if (!best) {
+      return candidate;
+    }
+
+    return (candidate.distance_m ?? Infinity) < (best.distance_m ?? Infinity) ? candidate : best;
+  }, null);
+
+  if (
+    !closestBuilding ||
+    (closestBuilding.distance_m ?? Infinity) > nearestBuildingViewportMaxDistanceMeters
+  ) {
+    return null;
+  }
+
+  const closestBuildingBounds = buildPositionsBounds([
+    buildLeafletPositions(closestBuilding.geometry || []),
+  ]);
+  return expandBoundsByMeters(closestBuildingBounds, nearestBuildingViewportPaddingMeters);
+}
+
+function buildViewportBounds({ preview, propertyContext, roofSelection, gardenZones, mode }) {
+  if (mode === "garden" && gardenZones.length) {
+    const zoneBounds = buildPositionsBounds(
+      gardenZones.map((zone) => buildLeafletPositions(zone.geometry || [])),
+    );
+    if (zoneBounds) {
+      return zoneBounds;
+    }
+  }
+
+  if (mode === "solar" && roofSelection?.geometry) {
+    const roofBounds = buildPositionsBounds([
+      buildLeafletPositions(roofSelection.geometry),
+    ]);
+    if (roofBounds) {
+      return roofBounds;
+    }
+  }
+
+  const nearestBuildingBounds =
+    mode === "garden" || mode === "solar"
+      ? buildNearestBuildingViewportBounds(preview, propertyContext)
+      : null;
+  if (nearestBuildingBounds) {
+    return nearestBuildingBounds;
+  }
+
+  const contextEnvelopeBounds = isYardScaleContextEnvelope(propertyContext)
+    ? buildBoundsArray(propertyContext?.match_envelope?.bounds)
+    : null;
+  if (contextEnvelopeBounds) {
+    return contextEnvelopeBounds;
+  }
+
+  if (shouldUsePreviewBounds(preview)) {
+    return buildBoundsArray(preview.bounds);
+  }
+
+  return buildSyntheticPreviewBounds(preview);
 }
 
 function getGardenZoneColor(zone, index) {
@@ -78,8 +256,19 @@ function getGardenZoneColor(zone, index) {
   return gardenZonePalette[index % gardenZonePalette.length];
 }
 
-function MapViewport({ preview, focusZoom, maxZoom }) {
+function MapViewport({ preview, propertyContext, roofSelection, gardenZones, mode, focusZoom, maxZoom }) {
   const map = useMap();
+  const viewportBounds = useMemo(
+    () =>
+      buildViewportBounds({
+        preview,
+        propertyContext,
+        roofSelection,
+        gardenZones,
+        mode,
+      }),
+    [gardenZones, mode, preview, propertyContext, roofSelection],
+  );
 
   useEffect(() => {
     if (!preview) {
@@ -87,19 +276,16 @@ function MapViewport({ preview, focusZoom, maxZoom }) {
       return;
     }
 
-    if (shouldUsePreviewBounds(preview)) {
-      map.fitBounds(
-        [
-          [preview.bounds.south, preview.bounds.west],
-          [preview.bounds.north, preview.bounds.east],
-        ],
-        { padding: [24, 24], maxZoom: clampZoom(focusZoom, maxZoom) },
-      );
+    if (viewportBounds) {
+      map.fitBounds(viewportBounds, {
+        padding: [32, 32],
+        maxZoom: clampZoom(focusZoom, maxZoom),
+      });
       return;
     }
 
     map.setView([preview.latitude, preview.longitude], clampZoom(focusZoom, maxZoom));
-  }, [focusZoom, map, maxZoom, preview]);
+  }, [focusZoom, map, maxZoom, preview, viewportBounds]);
 
   return null;
 }
@@ -154,7 +340,7 @@ export default function PropertyMap({
   onRemoveSelectedGardenZone,
   onClearGardenZones,
 }) {
-  const [styleId, setStyleId] = useState(mode === "garden" ? "terrain" : "streets");
+  const [styleId, setStyleId] = useState(mode === "space-weather" ? "terrain" : "streets");
   const [showContextEnvelope, setShowContextEnvelope] = useState(mode === "garden");
   const [showBuildingContext, setShowBuildingContext] = useState(mode === "garden");
   const activeStyle = mapStyles[styleId];
@@ -164,7 +350,7 @@ export default function PropertyMap({
   const isGardenMode = mode === "garden";
 
   useEffect(() => {
-    setStyleId(mode === "garden" ? "terrain" : "streets");
+    setStyleId(mode === "space-weather" ? "terrain" : "streets");
     setShowContextEnvelope(mode === "garden");
     setShowBuildingContext(mode === "garden");
   }, [mode]);
@@ -385,6 +571,10 @@ export default function PropertyMap({
           <MapZoomConstraints maxZoom={activeStyle.maxZoom} />
           <MapViewport
             preview={preview}
+            propertyContext={propertyContext}
+            roofSelection={roofSelection}
+            gardenZones={gardenZones}
+            mode={mode}
             focusZoom={activeStyle.focusZoom}
             maxZoom={activeStyle.maxZoom}
           />
@@ -537,7 +727,8 @@ export default function PropertyMap({
         </span>
         {styleId === "terrain" ? (
           <span className="map-note">
-            Terrain stays at a broader zoom than Street so it remains legible.
+            Terrain can zoom to parcel scale now, but it overzooms past native tile detail so it
+            will look softer than Street.
           </span>
         ) : null}
         {isGardenMode && propertyContext ? (
