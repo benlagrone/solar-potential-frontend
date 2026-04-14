@@ -15,6 +15,7 @@ import {
   saveSolarReport,
   upsertPropertyRecord,
 } from "./lib/api.js";
+import { trackBuddyPageView } from "./lib/analytics.js";
 import { analyzeGardenZones } from "./lib/gardenAnalysis.js";
 import { buildGardenZone, buildRoofModel } from "./lib/geometry.js";
 import { buildPlantingGuidance } from "./lib/plantGuidance.js";
@@ -564,6 +565,9 @@ function ReasonList({ reasons, emptyCopy }) {
 }
 
 function SpaceWeatherPanel({ data, loading, error, onRefresh }) {
+  const drap = data?.local?.drap;
+  const glotec = data?.local?.glotec;
+
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -573,7 +577,7 @@ function SpaceWeatherPanel({ data, loading, error, onRefresh }) {
         </div>
         <p className="panel-copy">
           Separate from the annual solar estimate. This layer focuses on local relevance for flare,
-          geomagnetic, aurora, and GNSS conditions.
+          geomagnetic, aurora, HF absorption, and GNSS conditions.
         </p>
       </div>
 
@@ -619,6 +623,10 @@ function SpaceWeatherPanel({ data, loading, error, onRefresh }) {
               label={`GNSS ${formatLabel(data.local?.gnss_risk)}`}
               tone={data.local?.gnss_risk}
             />
+            <LevelBadge
+              label={`HF ${formatLabel(data.local?.hf_radio_risk)}`}
+              tone={data.local?.hf_radio_risk}
+            />
           </div>
 
           <div className="stats-grid">
@@ -663,6 +671,32 @@ function SpaceWeatherPanel({ data, loading, error, onRefresh }) {
               value={formatLabel(data.local?.latitude_band)}
               detail={data.local?.ground_radiation_note || "Local impact note unavailable."}
             />
+            <StatCard
+              label="D-RAP"
+              value={
+                drap?.status === "available" && drap?.absorption_frequency_mhz != null
+                  ? `Up to ${formatNumber(drap.absorption_frequency_mhz, 1)} MHz`
+                  : formatLabel(drap?.status || "unavailable")
+              }
+              detail={
+                drap?.status === "available"
+                  ? `${formatLabel(drap?.risk)} risk${drap?.recovery_time ? ` · recovery ${drap.recovery_time}` : ""}`
+                  : drap?.detail || "HF absorption detail unavailable."
+              }
+            />
+            <StatCard
+              label="GloTEC anomaly"
+              value={
+                glotec?.status === "available" && glotec?.anomaly != null
+                  ? `${formatNumber(glotec.anomaly, 1)} TECU`
+                  : formatLabel(glotec?.status || "unavailable")
+              }
+              detail={
+                glotec?.status === "available"
+                  ? `${formatLabel(glotec?.risk)} risk${glotec?.distance_km != null ? ` · ${formatNumber(glotec.distance_km, 0)} km away` : ""}`
+                  : glotec?.detail || "Ionospheric anomaly detail unavailable."
+              }
+            />
           </div>
 
           <div className="guidance-stack solar-insight-stack">
@@ -691,6 +725,20 @@ function SpaceWeatherPanel({ data, loading, error, onRefresh }) {
               ) : (
                 <p>No active watch headlines are being surfaced right now.</p>
               )}
+            </article>
+
+            <article className="guidance-card">
+              <strong>Local HF and ionosphere detail</strong>
+              <div className="status-list">
+                <div className="status-row">
+                  <strong>D-RAP</strong>
+                  <p>{drap?.detail || "HF absorption detail unavailable."}</p>
+                </div>
+                <div className="status-row">
+                  <strong>GloTEC</strong>
+                  <p>{glotec?.detail || "Ionospheric detail unavailable."}</p>
+                </div>
+              </div>
             </article>
 
             <article className="guidance-card">
@@ -1091,11 +1139,11 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Site context</p>
-          <h2>Nearby buildings and terrain cues</h2>
+          <h2>Nearby buildings, canopy, and terrain cues</h2>
         </div>
         <p className="panel-copy">
-          This first context layer adds building and terrain pressure to the garden workflow. It is
-          still not canopy-aware or parcel-certified.
+          This context layer now adds mapped canopy cues alongside building and terrain pressure. It
+          is still not parcel-certified or tree-perfect.
         </p>
       </div>
 
@@ -1121,6 +1169,12 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
               tone={context.shade_context?.obstruction_risk}
             />
             <LevelBadge
+              label={`Canopy ${formatLabel(
+                (context.canopy_context?.canopy_count || 0) > 0 ? "mapped" : "limited",
+              )}`}
+              tone={(context.canopy_context?.canopy_count || 0) > 0 ? "watch" : "neutral"}
+            />
+            <LevelBadge
               label={`Terrain ${formatLabel(context.terrain_context?.terrain_class)}`}
               tone="neutral"
             />
@@ -1139,6 +1193,15 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
               label="Nearby buildings"
               value={String(context.building_context?.building_count || 0)}
               detail={`${formatNumber(context.match_envelope?.width_m || 0, 0)} m context width`}
+            />
+            <StatCard
+              label="Mapped canopy"
+              value={String(context.canopy_context?.canopy_count || 0)}
+              detail={
+                context.canopy_context?.nearest_canopy
+                  ? `${formatNumber(context.canopy_context.nearest_canopy.distance_m || 0, 0)} m to nearest canopy`
+                  : "No nearby mapped canopy in the current radius."
+              }
             />
             <StatCard
               label="Nearest structure"
@@ -1213,13 +1276,34 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
             </article>
 
             <article className="guidance-card">
+              <strong>Mapped canopy cues</strong>
+              {(context.canopy_context?.nearby_canopy || []).length ? (
+                <div className="status-list">
+                  {context.canopy_context.nearby_canopy.slice(0, 3).map((feature) => (
+                    <div className="status-row" key={feature.id}>
+                      <strong>{feature.name || "Nearby canopy"}</strong>
+                      <p>
+                        {formatLabel(feature.direction_bucket)} side, about{" "}
+                        {formatNumber(feature.distance_m || 0, 0)} m away,{" "}
+                        {formatNumber(feature.height_m || 0, 1)} m tall.
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p>No nearby mapped canopy features are being surfaced in this planning radius.</p>
+              )}
+            </article>
+
+            <article className="guidance-card">
               <strong>What changed in Garden Buddy</strong>
               <div className="status-list">
                 <div className="status-row">
                   <strong>Zone model</strong>
                   <p>
-                    Zone sun hours now temper the open-sky estimate with nearby building pressure and
-                    a light terrain bias instead of relying on latitude and lot position alone.
+                    Zone sun hours now temper the open-sky estimate with nearby building pressure,
+                    mapped canopy cues, and a light terrain bias instead of relying on latitude and
+                    lot position alone.
                   </p>
                 </div>
                 <div className="status-row">
@@ -1323,6 +1407,13 @@ function SavedSolarReportList({
                   report.homeowner_quote.updated_at || report.homeowner_quote.created_at,
                 )}
                 .
+              </p>
+              <p className="saved-report-quote-note">
+                {report.homeowner_quote.lead_capture?.lead_count
+                  ? `${report.homeowner_quote.lead_capture.lead_count} installer follow-up request${
+                      report.homeowner_quote.lead_capture.lead_count === 1 ? "" : "s"
+                    } queued from this quote.`
+                  : "Installer follow-up capture now lives on the homeowner quote page."}
               </p>
               <a
                 className="saved-report-share-url"
@@ -1666,6 +1757,7 @@ export default function App() {
   const surfaceIrradianceRef = useRef(surfaceIrradiance);
   const spaceWeatherRequestIdRef = useRef(0);
   const surfaceIrradianceRequestIdRef = useRef(0);
+  const hasTrackedModePageViewRef = useRef(false);
 
   const loadSurfaceIrradiance = async ({ forceRefresh = false } = {}) => {
     if (!propertyPreview?.latitude || !propertyPreview?.longitude) {
@@ -1800,6 +1892,15 @@ export default function App() {
   }, [activePage]);
 
   useEffect(() => {
+    if (!hasTrackedModePageViewRef.current) {
+      hasTrackedModePageViewRef.current = true;
+      return;
+    }
+
+    trackBuddyPageView(activePage, landingContent.pageLabel);
+  }, [activePage, landingContent.pageLabel]);
+
+  useEffect(() => {
     setDrawingTarget(null);
     setDrawingPoints([]);
   }, [activePage]);
@@ -1874,7 +1975,7 @@ export default function App() {
     }
 
     const coordinatesMatch =
-      propertyContext?.context_version === "property-context-v1" &&
+      String(propertyContext?.context_version || "").startsWith("property-context-v") &&
       Math.abs((propertyContext?.latitude || 0) - propertyPreview.latitude) < 0.000001 &&
       Math.abs((propertyContext?.longitude || 0) - propertyPreview.longitude) < 0.000001;
     if (coordinatesMatch) {
@@ -1928,7 +2029,7 @@ export default function App() {
 
         setPropertyContext(null);
         setPropertyContextError(
-          error?.message || "Unable to load nearby building and terrain context for this property.",
+          error?.message || "Unable to load nearby building, canopy, and terrain context for this property.",
         );
       })
       .finally(() => {
@@ -2878,7 +2979,7 @@ export default function App() {
               <span className="status-label">Solar site context</span>
               <strong>
                 {propertyContextLoading && !propertyContext
-                  ? "Loading nearby building and terrain context"
+                  ? "Loading nearby building, canopy, and terrain context"
                   : propertyContext
                     ? "Solar context ready"
                     : propertyContextError
@@ -2890,7 +2991,7 @@ export default function App() {
                   ? `${propertyContext.summary} Solar production now uses this context when it refines tilt, roof-facing assumptions, and site losses.`
                   : propertyContextError
                     ? propertyContextError
-                    : "The estimate will use generic site assumptions until nearby building and terrain context is available."}
+                    : "The estimate will use generic site assumptions until nearby building, canopy, and terrain context is available."}
               </p>
             </div>
           ) : null}
@@ -3009,7 +3110,7 @@ export default function App() {
                       detail={
                         result.production_model?.site_context_available
                           ? `${formatNumber(result.production_model?.modeled_site_losses_percent || 0, 1)}% modeled site losses`
-                          : "No saved building and terrain context yet."
+                          : "No saved building, canopy, and terrain context yet."
                       }
                     />
                     <StatCard
@@ -3119,11 +3220,11 @@ export default function App() {
                           <strong>Site context</strong>
                           <p>
                             {result.production_model?.site_context_available
-                              ? `${result.production_model?.site_context_summary || "Nearby building and terrain context is active for this property."} That adds about ${formatNumber(
+                              ? `${result.production_model?.site_context_summary || "Nearby building, canopy, and terrain context is active for this property."} That adds about ${formatNumber(
                                   result.production_model?.modeled_site_losses_percent || 0,
                                   1,
                                 )}% extra modeled site losses in this planning pass.`
-                              : "Nearby building and terrain context has not been saved for this property yet, so the model is still using generic site losses."}
+                              : "Nearby building, canopy, and terrain context has not been saved for this property yet, so the model is still using generic site losses."}
                           </p>
                         </div>
                         <div className="status-row">
@@ -3230,7 +3331,7 @@ export default function App() {
                         )}°F and ${formatNumber(
                           propertyClimate.growing_season.average_relative_humidity,
                           0,
-                        )}% humidity, with an estimated hardiness band of ${propertyClimate?.hardiness_zone?.label || "unknown"}.` : ""} These zones now save with the shared property record, show up in the recent garden-plan library, reopen directly into the map, and now temper the open-sky model with nearby building and terrain context. ${selectedGardenZone.analysis.modelNote}`
+                        )}% humidity, with an estimated hardiness band of ${propertyClimate?.hardiness_zone?.label || "unknown"}.` : ""} These zones now save with the shared property record, show up in the recent garden-plan library, reopen directly into the map, and now temper the open-sky model with nearby building, canopy, and terrain context. ${selectedGardenZone.analysis.modelNote}`
                       : "Garden Buddy now starts with the same address-grade property match as Solar Buddy. Draw one or more real yard zones on the live map to save them with this property, reopen them later from the recent garden-plan library, and unlock property context, climate context, first-pass sun classes, planting guidance, and monthly exposure summaries."}
                   </p>
 
@@ -3300,10 +3401,16 @@ export default function App() {
                     />
                     <StatCard
                       label="Context slice"
-                      value={propertyContext ? "Buildings + terrain" : "Open sky only"}
+                      value={
+                        propertyContext
+                          ? (propertyContext.canopy_context?.canopy_count || 0) > 0
+                            ? "Buildings + canopy + terrain"
+                            : "Buildings + terrain"
+                          : "Open sky only"
+                      }
                       detail={
                         propertyContext
-                          ? `${propertyContext.building_context?.building_count || 0} nearby buildings in the current context radius`
+                          ? `${propertyContext.building_context?.building_count || 0} nearby buildings and ${propertyContext.canopy_context?.canopy_count || 0} canopy features in the current context radius`
                           : "Site context has not loaded yet."
                       }
                     />
@@ -3339,7 +3446,9 @@ export default function App() {
                       <span>Model boundary</span>
                       <strong>
                         {propertyContext
-                          ? "Buildings and terrain only, no canopy yet"
+                          ? (propertyContext.canopy_context?.canopy_count || 0) > 0
+                            ? "Buildings, canopy, and terrain cues"
+                            : "Buildings and terrain only"
                           : "No tree or building shade yet"}
                       </strong>
                     </article>
@@ -3392,8 +3501,8 @@ export default function App() {
                               selectedGardenZone.analysis.openSkyGrowingSeasonAverageSunHours,
                               1,
                             )}{" "}
-                            hrs/day in the growing season before the current building and terrain
-                            slice is applied.
+                            hrs/day in the growing season before the current building, canopy, and
+                            terrain slice is applied.
                           </p>
                         ) : null}
                         {selectedGardenZone.analysis.contextAdjustment?.strongestBuilding ? (

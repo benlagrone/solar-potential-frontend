@@ -645,6 +645,92 @@ function fetchDemoSolarQuote(quoteId) {
   throw new Error("Solar quote not found");
 }
 
+function submitDemoSolarQuoteLead(quoteId, payload) {
+  for (const [guid, record] of demoPropertyRecords.entries()) {
+    const reports = record.saved_solar_reports || [];
+    const report = reports.find((candidate) => candidate.homeowner_quote?.id === quoteId);
+    if (!report) {
+      continue;
+    }
+
+    const timestamp = new Date().toISOString();
+    const lead = {
+      id: createClientGuid(),
+      quote_id: quoteId,
+      property_guid: guid,
+      report_id: report.id,
+      created_at: timestamp,
+      contact: {
+        full_name: payload.full_name,
+        email: String(payload.email || "").toLowerCase(),
+        phone: payload.phone,
+        preferred_contact: payload.preferred_contact || "phone",
+      },
+      qualification: {
+        label:
+          payload.monthly_bill_range === "200-plus" || payload.install_timeline === "asap"
+            ? "Qualified"
+            : "Needs review",
+        monthly_bill_range: payload.monthly_bill_range || "unknown",
+        install_timeline: payload.install_timeline || "unknown",
+      },
+      notes: payload.notes || "",
+      consent_to_contact: Boolean(payload.consent_to_contact),
+      handoff: {
+        route_id: "demo-installer-review",
+        route_label: "Demo installer review queue",
+        partner_name: "Solar Buddy installer review",
+        partner_email: null,
+        delivery_channel: "manual-review",
+        status: "queued",
+        queued_at: timestamp,
+        summary: "Queued for demo installer review via manual-review.",
+      },
+    };
+
+    const nextQuote = {
+      ...report.homeowner_quote,
+      lead_capture: {
+        enabled: true,
+        route: {
+          route_id: "demo-installer-review",
+          route_label: "Demo installer review queue",
+          partner_name: "Solar Buddy installer review",
+          partner_email: null,
+          delivery_channel: "manual-review",
+        },
+        lead_count: 1,
+        latest_submitted_at: timestamp,
+        latest_status: "queued",
+        latest_qualification: lead.qualification.label,
+        summary: lead.handoff.summary,
+      },
+    };
+    const nextReports = reports.map((candidate) =>
+      candidate.id === report.id
+        ? {
+            ...candidate,
+            homeowner_quote: nextQuote,
+          }
+        : candidate,
+    );
+
+    rememberDemoPropertyRecord({
+      ...record,
+      saved_solar_reports: nextReports,
+      stored_at: timestamp,
+    });
+
+    return {
+      lead,
+      quote: nextQuote,
+      report: nextReports.find((candidate) => candidate.id === report.id) || report,
+    };
+  }
+
+  throw new Error("Solar quote not found");
+}
+
 function findDemoPropertyRecordByAddress(address) {
   const lookupKey = buildAddressLookupKey(address);
 
@@ -1551,6 +1637,28 @@ export async function fetchSolarQuote(quoteId) {
 
   if (!response.ok) {
     throw new Error(data?.detail || "Unable to load homeowner quote");
+  }
+
+  return data;
+}
+
+export async function submitSolarQuoteLead(quoteId, payload) {
+  if (demoMode) {
+    return submitDemoSolarQuoteLead(quoteId, payload);
+  }
+
+  const response = await fetch(`${apiBaseUrl}/api/solar-quote/${quoteId}/lead`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(data?.detail || "Unable to submit installer follow-up request");
   }
 
   return data;

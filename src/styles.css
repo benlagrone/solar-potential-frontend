@@ -409,18 +409,50 @@ button {
   font-weight: 700;
 }
 
-.solar-form input {
+.solar-form input,
+.solar-form select,
+.solar-form textarea {
   width: 100%;
   border: 1px solid rgba(20, 32, 51, 0.12);
   border-radius: 18px;
   padding: 14px 16px;
   background: rgba(255, 255, 255, 0.86);
   color: var(--text-main);
+  font: inherit;
 }
 
-.solar-form input:focus {
+.solar-form textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.solar-form input:focus,
+.solar-form select:focus,
+.solar-form textarea:focus {
   outline: 2px solid rgba(31, 108, 92, 0.22);
   border-color: rgba(31, 108, 92, 0.35);
+}
+
+.checkbox-field {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 12px !important;
+  font-weight: 600 !important;
+}
+
+.checkbox-field input {
+  width: auto;
+  margin-top: 2px;
+}
+
+.quote-lead-form {
+  margin-top: 10px;
+}
+
+.quote-lead-success {
+  margin: 0;
+  color: #155a4d;
+  font-weight: 700;
 }
 
 .field-row,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchSolarQuote } from "./lib/api.js";
+import { fetchSolarQuote, submitSolarQuoteLead } from "./lib/api.js";
 
 const monthLabels = [
   ["01", "Jan"],
@@ -15,6 +15,17 @@ const monthLabels = [
   ["11", "Nov"],
   ["12", "Dec"],
 ];
+
+const initialLeadForm = {
+  full_name: "",
+  email: "",
+  phone: "",
+  preferred_contact: "phone",
+  monthly_bill_range: "100-200",
+  install_timeline: "1-3-months",
+  notes: "",
+  consent_to_contact: false,
+};
 
 function formatNumber(value, digits = 1) {
   return new Intl.NumberFormat("en-US", {
@@ -93,6 +104,10 @@ export default function QuotePage() {
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [leadForm, setLeadForm] = useState(initialLeadForm);
+  const [leadSubmitting, setLeadSubmitting] = useState(false);
+  const [leadSuccess, setLeadSuccess] = useState("");
+  const [leadError, setLeadError] = useState("");
 
   useEffect(() => {
     let canceled = false;
@@ -127,6 +142,40 @@ export default function QuotePage() {
       canceled = true;
     };
   }, [quoteId]);
+
+  async function handleLeadSubmit(event) {
+    event.preventDefault();
+    if (!payload?.quote?.id) {
+      return;
+    }
+
+    setLeadSubmitting(true);
+    setLeadSuccess("");
+    setLeadError("");
+
+    try {
+      const nextPayload = await submitSolarQuoteLead(payload.quote.id, leadForm);
+      setPayload((current) =>
+        current
+          ? {
+              ...current,
+              quote: nextPayload.quote || current.quote,
+              report: nextPayload.report || current.report,
+            }
+          : current,
+      );
+      setLeadSuccess("Installer follow-up request queued.");
+      setLeadForm((current) => ({
+        ...current,
+        notes: "",
+        consent_to_contact: false,
+      }));
+    } catch (submissionError) {
+      setLeadError(submissionError.message || "Unable to submit installer follow-up request.");
+    } finally {
+      setLeadSubmitting(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -252,6 +301,159 @@ export default function QuotePage() {
             <span className="status-label">Planning note</span>
             <strong>This is a shareable planning quote, not a final installer proposal.</strong>
             <p>{quote.disclaimer}</p>
+          </div>
+
+          <div className="guidance-stack">
+            <article className="guidance-card">
+              <div className="insight-heading">
+                <strong>Request installer follow-up</strong>
+                <span className="soft-badge">
+                  {quote.lead_capture?.route?.route_label || "Installer review queue"}
+                </span>
+              </div>
+              <p>
+                Submit contact details and a couple of qualifier fields to queue this quote for
+                installer follow-up.
+              </p>
+
+              <div className="status-list">
+                <div className="status-row">
+                  <strong>Queue status</strong>
+                  <p>{quote.lead_capture?.summary || "Lead capture is ready on this quote."}</p>
+                </div>
+                <div className="status-row">
+                  <strong>Requests on this quote</strong>
+                  <p>{quote.lead_capture?.lead_count || 0}</p>
+                </div>
+              </div>
+
+              <form className="solar-form quote-lead-form" onSubmit={handleLeadSubmit}>
+                <div className="field-row">
+                  <label>
+                    Full name
+                    <input
+                      required
+                      value={leadForm.full_name}
+                      onChange={(event) =>
+                        setLeadForm((current) => ({ ...current, full_name: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Email
+                    <input
+                      type="email"
+                      required
+                      value={leadForm.email}
+                      onChange={(event) =>
+                        setLeadForm((current) => ({ ...current, email: event.target.value }))
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="field-row">
+                  <label>
+                    Phone
+                    <input
+                      type="tel"
+                      required
+                      value={leadForm.phone}
+                      onChange={(event) =>
+                        setLeadForm((current) => ({ ...current, phone: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Preferred contact
+                    <select
+                      value={leadForm.preferred_contact}
+                      onChange={(event) =>
+                        setLeadForm((current) => ({
+                          ...current,
+                          preferred_contact: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="phone">Phone</option>
+                      <option value="text">Text</option>
+                      <option value="email">Email</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="field-row">
+                  <label>
+                    Monthly bill range
+                    <select
+                      value={leadForm.monthly_bill_range}
+                      onChange={(event) =>
+                        setLeadForm((current) => ({
+                          ...current,
+                          monthly_bill_range: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="under-100">Under $100</option>
+                      <option value="100-200">$100-$200</option>
+                      <option value="200-plus">$200+</option>
+                      <option value="unknown">Not sure yet</option>
+                    </select>
+                  </label>
+                  <label>
+                    Install timeline
+                    <select
+                      value={leadForm.install_timeline}
+                      onChange={(event) =>
+                        setLeadForm((current) => ({
+                          ...current,
+                          install_timeline: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="asap">ASAP</option>
+                      <option value="1-3-months">1-3 months</option>
+                      <option value="3-6-months">3-6 months</option>
+                      <option value="researching">Researching</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label>
+                  Project notes
+                  <textarea
+                    rows="4"
+                    value={leadForm.notes}
+                    onChange={(event) =>
+                      setLeadForm((current) => ({ ...current, notes: event.target.value }))
+                    }
+                  />
+                </label>
+
+                <label className="checkbox-field">
+                  <input
+                    type="checkbox"
+                    checked={leadForm.consent_to_contact}
+                    onChange={(event) =>
+                      setLeadForm((current) => ({
+                        ...current,
+                        consent_to_contact: event.target.checked,
+                      }))
+                    }
+                  />
+                  <span>I agree to be contacted about this solar quote.</span>
+                </label>
+
+                <div className="quote-actions">
+                  <button className="primary-button" type="submit" disabled={leadSubmitting}>
+                    {leadSubmitting ? "Queueing..." : "Request installer follow-up"}
+                  </button>
+                </div>
+
+                {leadSuccess ? <p className="quote-lead-success">{leadSuccess}</p> : null}
+                {leadError ? <p className="error-banner">{leadError}</p> : null}
+              </form>
+            </article>
           </div>
         </section>
 

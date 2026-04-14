@@ -61,6 +61,17 @@ const obstructionWeightByDirection = {
   northwest: { winter: 0.14, shoulder: 0.12, summer: 0.08 },
 };
 
+const canopyWeightByDirection = {
+  north: { winter: 0.04, shoulder: 0.08, summer: 0.1 },
+  northeast: { winter: 0.08, shoulder: 0.12, summer: 0.16 },
+  east: { winter: 0.12, shoulder: 0.18, summer: 0.24 },
+  southeast: { winter: 0.16, shoulder: 0.24, summer: 0.32 },
+  south: { winter: 0.12, shoulder: 0.2, summer: 0.28 },
+  southwest: { winter: 0.16, shoulder: 0.24, summer: 0.32 },
+  west: { winter: 0.12, shoulder: 0.18, summer: 0.24 },
+  northwest: { winter: 0.08, shoulder: 0.12, summer: 0.16 },
+};
+
 function clamp(value, minimum, maximum) {
   return Math.min(Math.max(value, minimum), maximum);
 }
@@ -240,7 +251,7 @@ function getConfidence(matchQuality, areaSquareFeet) {
   if (score >= 0.66) {
     return {
       label: "Moderate",
-      description: "Useful for first-pass planning, but still missing obstruction and canopy data.",
+      description: "Useful for first-pass planning, but still missing parcel-certified boundaries and tree-perfect shade geometry.",
     };
   }
 
@@ -373,11 +384,16 @@ function getLowestMonth(monthlySunHours) {
 
 function buildContextAdjustedSunHours(zone, propertyContext, openSkyMonthlySunHours) {
   const buildings = propertyContext?.building_context?.nearby_buildings || [];
+  const canopyFeatures = propertyContext?.canopy_context?.nearby_canopy || [];
   const zoneLatitude = zone.centroid?.lat;
   const zoneLongitude = zone.centroid?.lng;
   const terrainBias = getTerrainBias(propertyContext);
 
-  if (zoneLatitude == null || zoneLongitude == null || !buildings.length) {
+  if (
+    zoneLatitude == null ||
+    zoneLongitude == null ||
+    (!buildings.length && !canopyFeatures.length)
+  ) {
     const adjustedWithoutBuildings = Object.fromEntries(
       Object.entries(openSkyMonthlySunHours).map(([monthKey, hours]) => {
         const seasonWeight = getMonthSeasonWeight(monthKey);
@@ -390,8 +406,12 @@ function buildContextAdjustedSunHours(zone, propertyContext, openSkyMonthlySunHo
       openSkyMonthlySunHours,
       totalPenaltyHours: 0,
       strongestBuilding: null,
+      strongestCanopy: null,
       terrainBias,
       buildingPenaltyByMonth: Object.fromEntries(
+        Object.keys(openSkyMonthlySunHours).map((monthKey) => [monthKey, 0]),
+      ),
+      canopyPenaltyByMonth: Object.fromEntries(
         Object.keys(openSkyMonthlySunHours).map((monthKey) => [monthKey, 0]),
       ),
     };
@@ -399,11 +419,14 @@ function buildContextAdjustedSunHours(zone, propertyContext, openSkyMonthlySunHo
 
   let totalPenaltyHours = 0;
   let strongestBuilding = null;
+  let strongestCanopy = null;
   const buildingPenaltyByMonth = {};
+  const canopyPenaltyByMonth = {};
   const adjustedMonthlySunHours = Object.fromEntries(
     Object.entries(openSkyMonthlySunHours).map(([monthKey, baseHours]) => {
       const seasonWeight = getMonthSeasonWeight(monthKey);
       let monthPenalty = 0;
+      let monthCanopyPenalty = 0;
 
       buildings.forEach((building) => {
         const centroid = building.centroid;
@@ -446,13 +469,61 @@ function buildContextAdjustedSunHours(zone, propertyContext, openSkyMonthlySunHo
         }
       });
 
+      canopyFeatures.forEach((feature) => {
+        const centroid = feature.centroid;
+        if (!centroid) {
+          return;
+        }
+
+        const distanceMeters = haversineMeters(
+          zoneLatitude,
+          zoneLongitude,
+          centroid.lat,
+          centroid.lng,
+        );
+        if (distanceMeters > 70) {
+          return;
+        }
+
+        const canopyHeight = Number(feature.height_m || 0);
+        const normalizedPressure = clamp((canopyHeight / Math.max(distanceMeters, 4)) * 0.7, 0, 1.8);
+        const bearingDegrees = getBearingDegrees(
+          zoneLatitude,
+          zoneLongitude,
+          centroid.lat,
+          centroid.lng,
+        );
+        const directionBucket =
+          feature.direction_bucket || getDirectionBucket(bearingDegrees);
+        const directionalWeight =
+          canopyWeightByDirection[directionBucket]?.[seasonWeight] || 0.1;
+        const canopyPenalty = normalizedPressure * directionalWeight;
+        monthCanopyPenalty += canopyPenalty;
+
+        if (!strongestCanopy || canopyPenalty > strongestCanopy.penalty) {
+          strongestCanopy = {
+            ...feature,
+            penalty: canopyPenalty,
+            direction_bucket: directionBucket,
+            distance_m: round(distanceMeters, 1),
+          };
+        }
+      });
+
       const terrainAdjustment = terrainBias[seasonWeight] || 0;
-      totalPenaltyHours = Math.max(totalPenaltyHours, monthPenalty);
+      totalPenaltyHours = Math.max(totalPenaltyHours, monthPenalty + monthCanopyPenalty);
       buildingPenaltyByMonth[monthKey] = round(monthPenalty, 2);
+      canopyPenaltyByMonth[monthKey] = round(monthCanopyPenalty, 2);
 
       return [
         monthKey,
-        round(clamp(baseHours - monthPenalty + terrainAdjustment, 0.5, Math.max(baseHours + 0.25, 0.5))),
+        round(
+          clamp(
+            baseHours - monthPenalty - monthCanopyPenalty + terrainAdjustment,
+            0.5,
+            Math.max(baseHours + 0.25, 0.5),
+          ),
+        ),
       ];
     }),
   );
@@ -462,8 +533,10 @@ function buildContextAdjustedSunHours(zone, propertyContext, openSkyMonthlySunHo
     openSkyMonthlySunHours,
     totalPenaltyHours: round(totalPenaltyHours, 2),
     strongestBuilding,
+    strongestCanopy,
     terrainBias,
     buildingPenaltyByMonth,
+    canopyPenaltyByMonth,
   };
 }
 
@@ -543,7 +616,7 @@ function analyzeGardenZone(zone, propertyPreview, propertyContext) {
   const southOffset = getSouthOffset(zone, propertyPreview);
   const obstructionRisk = getObstructionRisk(contextAdjustment.totalPenaltyHours);
   const contextModelNote = propertyContext
-    ? "Adjusted from the open-sky model using nearby building footprints and terrain cues. Trees, fences, and parcel-certified boundaries are still not modeled."
+    ? "Adjusted from the open-sky model using nearby building footprints, mapped canopy cues, and terrain bias. Parcel-certified boundaries and tree-perfect shade geometry are still not modeled."
     : gardenAnalysisModelNote;
 
   return {
@@ -563,10 +636,13 @@ function analyzeGardenZone(zone, propertyPreview, propertyContext) {
       obstructionRisk,
       contextAdjustment: {
         strongestBuilding: contextAdjustment.strongestBuilding,
+        strongestCanopy: contextAdjustment.strongestCanopy,
         terrainBias: contextAdjustment.terrainBias,
         maxMonthlyPenaltyHours: contextAdjustment.totalPenaltyHours,
         buildingPenaltyByMonth: contextAdjustment.buildingPenaltyByMonth,
+        canopyPenaltyByMonth: contextAdjustment.canopyPenaltyByMonth,
         buildingCount: propertyContext?.building_context?.building_count || 0,
+        canopyCount: propertyContext?.canopy_context?.canopy_count || 0,
       },
       modelNote: contextModelNote,
     },
