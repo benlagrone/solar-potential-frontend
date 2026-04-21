@@ -271,6 +271,7 @@ function buildDemoSolarAssumptions({
   roofSelection,
   panel_efficiency,
   electricity_rate,
+  rate_assumption_source,
   installation_cost_per_watt,
   productionModel,
 }) {
@@ -288,7 +289,7 @@ function buildDemoSolarAssumptions({
       (productionModel?.performance_ratio || 0) * 100
     ).toFixed(0)}% performance ratio.`,
     `Panel efficiency is assumed at ${(normalizedPanelEfficiency * 100).toFixed(0)}%.`,
-    `Electricity rate is assumed at $${electricity_rate.toFixed(2)}/kWh.`,
+    `Electricity rate is assumed at $${electricity_rate.toFixed(2)}/kWh from ${rate_assumption_source}.`,
     `Installed cost is assumed at $${installation_cost_per_watt.toFixed(2)}/W.`,
     "Solar resource data source is demo with high quality.",
     "Shading, azimuth, roof pitch, utility tariff detail, and roof obstructions are not modeled yet.",
@@ -365,6 +366,37 @@ function buildDemoSolarConfidence({ matchQuality, sizingSource, roofSelection, p
   };
 }
 
+function buildDemoUtilityContext(address) {
+  const state = String(address?.state || "").trim().toUpperCase();
+  const baseRateByState = {
+    CA: 0.29,
+    HI: 0.36,
+    MA: 0.27,
+    NY: 0.26,
+    TX: 0.17,
+    FL: 0.15,
+    CO: 0.16,
+    IL: 0.18,
+  };
+  const blendedRate = Number((baseRateByState[state] || 0.18).toFixed(3));
+
+  return {
+    utility_name: `${address?.city || "Local"} Electric`,
+    rate_name: "Residential average retail price",
+    rate_source: "Demo utility context",
+    rate_effective_date: new Date().toISOString().slice(0, 7),
+    blended_kwh_rate: blendedRate,
+    tou_supported: false,
+    export_compensation_type: "Net metering assumptions not modeled in demo mode",
+    net_metering_status: "unknown",
+    confidence: "medium",
+    state_id: state || null,
+    source_details: {
+      demo: true,
+    },
+  };
+}
+
 function buildDemoEstimate(formValues) {
   const {
     guid,
@@ -373,6 +405,7 @@ function buildDemoEstimate(formValues) {
     system_size,
     panel_efficiency,
     electricity_rate,
+    electricity_rate_mode,
     installation_cost_per_watt,
   } = formValues;
 
@@ -386,6 +419,20 @@ function buildDemoEstimate(formValues) {
       system_size ??
       0).toFixed(2),
   );
+  const utilityContext = buildDemoUtilityContext(address);
+  const rateMode = electricity_rate_mode === "manual" ? "manual" : "auto";
+  const electricityRateUsed =
+    rateMode === "auto"
+      ? Number(utilityContext.blended_kwh_rate.toFixed(4))
+      : Number(Number(electricity_rate).toFixed(4));
+  const normalizedUtilityContext = {
+    ...utilityContext,
+    manual_rate_fallback: Number(Number(electricity_rate).toFixed(4)),
+    applied_rate: rateMode === "auto",
+    applied_rate_mode: rateMode === "auto" ? "utility-auto" : "manual-override",
+  };
+  const rateAssumptionSource =
+    rateMode === "auto" ? utilityContext.rate_source : "manual input";
 
   if (!systemSizeKw) {
     throw new Error("Draw a roof area first.");
@@ -400,12 +447,12 @@ function buildDemoEstimate(formValues) {
     monthlyAllSky,
     avgAllSkyRadiation,
     panelEfficiency: panel_efficiency,
-    electricityRate: electricity_rate,
+    electricityRate: electricityRateUsed,
     roofSelection: effectiveRoofSelection,
   });
   const dailyProduction = productionModel.daily_production;
   const annualProduction = productionModel.annual_production;
-  const annualSavings = Number((annualProduction * electricity_rate).toFixed(2));
+  const annualSavings = Number((annualProduction * electricityRateUsed).toFixed(2));
   const systemCost = Number((systemSizeKw * 1000 * installation_cost_per_watt).toFixed(2));
   const paybackPeriod = annualSavings ? Number((systemCost / annualSavings).toFixed(2)) : null;
   const totalSavings = Number(
@@ -418,7 +465,8 @@ function buildDemoEstimate(formValues) {
     sizingSource,
     roofSelection: effectiveRoofSelection,
     panel_efficiency,
-    electricity_rate,
+    electricity_rate: electricityRateUsed,
+    rate_assumption_source: rateAssumptionSource,
     installation_cost_per_watt,
     productionModel,
   });
@@ -450,6 +498,11 @@ function buildDemoEstimate(formValues) {
     match_quality: matchQuality,
     system_size_kw: systemSizeKw,
     sizing_source: sizingSource,
+    electricity_rate_mode: rateMode,
+    electricity_rate_input: Number(Number(electricity_rate).toFixed(4)),
+    electricity_rate_used: electricityRateUsed,
+    rate_assumption_source: rateAssumptionSource,
+    utility_context: normalizedUtilityContext,
     roof_area_square_feet: effectiveRoofSelection?.areaSquareFeet ?? null,
     roof_area_square_meters: effectiveRoofSelection?.areaSquareMeters ?? null,
     assumptions,
@@ -467,6 +520,7 @@ function buildDemoEstimate(formValues) {
     lowest_month: productionModel.lowest_month,
     time_zone: "America/Chicago",
     data_source: "demo",
+    data_provider: "demo",
     data_quality: "demo",
   };
 }
@@ -531,6 +585,7 @@ function saveDemoSolarReport({
   guid,
   panel_efficiency,
   electricity_rate,
+  electricity_rate_mode,
   installation_cost_per_watt,
   roofSelection,
   reportName,
@@ -548,6 +603,7 @@ function saveDemoSolarReport({
     system_size: roofSelection?.recommendedKw ?? record.roof_selection?.recommendedKw ?? null,
     panel_efficiency,
     electricity_rate,
+    electricity_rate_mode,
     installation_cost_per_watt,
   });
   const report = {
@@ -562,7 +618,13 @@ function saveDemoSolarReport({
     payback_period: estimate.payback_period,
     confidence: estimate.confidence,
     data_source: estimate.data_source,
+    data_provider: estimate.data_provider,
     data_quality: estimate.data_quality,
+    electricity_rate_mode: estimate.electricity_rate_mode,
+    electricity_rate_input: estimate.electricity_rate_input,
+    electricity_rate_used: estimate.electricity_rate_used,
+    rate_assumption_source: estimate.rate_assumption_source,
+    utility_context: estimate.utility_context,
     roof_area_square_feet: estimate.roof_area_square_feet,
     roof_area_square_meters: estimate.roof_area_square_meters,
     production_model: estimate.production_model,
@@ -994,6 +1056,202 @@ function buildDemoSpaceWeather(coordinates) {
   };
 }
 
+function buildDemoSpaceWeatherHistory(coordinates, { days = 7 } = {}) {
+  const normalizedDays = Math.max(1, Math.min(Number(days) || 7, 90));
+  const now = new Date();
+  const startDate = new Date(now.getTime() - (normalizedDays - 1) * 24 * 60 * 60 * 1000);
+  const fetchedAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+  const seed = Math.abs(
+    Math.round((Number(coordinates.latitude || 0) * 13 + Number(coordinates.longitude || 0) * 9) * 10),
+  );
+  const latitudeBand =
+    Math.abs(Number(coordinates.latitude || 0)) >= 55
+      ? "high"
+      : Math.abs(Number(coordinates.latitude || 0)) >= 40
+        ? "mid"
+        : Math.abs(Number(coordinates.latitude || 0)) >= 25
+          ? "low"
+          : "equatorial";
+  const events = [];
+
+  for (let index = 0; index < normalizedDays; index += 6) {
+    const eventDate = new Date(now.getTime() - index * 24 * 60 * 60 * 1000);
+    const isMajor = (seed + index) % 3 === 0;
+    const flareClass = isMajor ? `M${1 + ((seed + index) % 5)}.${(seed + index) % 9}` : `C${3 + ((seed + index) % 5)}.${(seed + index) % 9}`;
+    const localHour = 11 + ((seed + index) % 5);
+    eventDate.setHours(localHour, 0, 0, 0);
+    events.push({
+      id: `demo-flare-${index}`,
+      kind: "flare",
+      label: flareClass,
+      tone: flareClass.startsWith("M") ? "watch" : "low",
+      observed_at: eventDate.toISOString(),
+      local_time: eventDate.toISOString(),
+      detail: `${flareClass} flare from a demo active region.`,
+      global_severity: {
+        class: flareClass,
+      },
+      local_relevance: {
+        tone: flareClass.startsWith("M") ? "watch" : "low",
+        label: "Daylight-side flare relevance",
+        detail: flareClass.startsWith("M")
+          ? "This flare peaked during local daylight, so it has moderate local radio relevance in demo mode."
+          : "This flare remained in the lower C-class range, so local daylight-side effects stay limited in demo mode.",
+      },
+    });
+  }
+
+  for (let index = 3; index < normalizedDays; index += 11) {
+    const eventDate = new Date(now.getTime() - index * 24 * 60 * 60 * 1000);
+    const kpValue = Number((4.7 + ((seed + index) % 4) * 0.8).toFixed(1));
+    eventDate.setHours(2 + ((seed + index) % 4), 0, 0, 0);
+    events.push({
+      id: `demo-storm-${index}`,
+      kind: "geomagnetic-storm",
+      label: `Kp ${kpValue.toFixed(1)}`,
+      tone: kpValue >= 7 ? "alert" : kpValue >= 5 ? "watch" : "low",
+      observed_at: eventDate.toISOString(),
+      local_time: eventDate.toISOString(),
+      detail: `Geomagnetic storm interval with a demo peak near Kp ${kpValue.toFixed(1)}.`,
+      global_severity: {
+        max_kp_index: kpValue,
+        start_time: eventDate.toISOString(),
+      },
+      local_relevance: {
+        tone:
+          latitudeBand === "mid" && kpValue >= 5
+            ? "watch"
+            : latitudeBand === "low" && kpValue >= 7
+              ? "watch"
+              : "low",
+        label: `${latitudeBand[0].toUpperCase()}${latitudeBand.slice(1)} latitude-band relevance`,
+        detail:
+          latitudeBand === "mid" && kpValue >= 5
+            ? "This latitude band starts to matter under stronger demo geomagnetic conditions."
+            : "This storm stays mostly poleward of the property in demo mode.",
+      },
+    });
+  }
+
+  events.sort((left, right) => new Date(right.observed_at) - new Date(left.observed_at));
+
+  const flareEvents = events.filter((event) => event.kind === "flare");
+  const stormEvents = events.filter((event) => event.kind === "geomagnetic-storm");
+  const strongestFlare = flareEvents.reduce((best, event) => {
+    const bestClass = String(best?.global_severity?.class || "A0");
+    const eventClass = String(event.global_severity?.class || "A0");
+    const rank = { A: 0, B: 1, C: 2, M: 3, X: 4 };
+    const bestScore = (rank[bestClass[0]] || 0) * 100 + Number(bestClass.slice(1) || 0);
+    const eventScore = (rank[eventClass[0]] || 0) * 100 + Number(eventClass.slice(1) || 0);
+    return eventScore > bestScore ? event : best;
+  }, null);
+  const strongestStorm = stormEvents.reduce(
+    (best, event) =>
+      (event.global_severity?.max_kp_index || 0) > (best?.global_severity?.max_kp_index || 0)
+        ? event
+        : best,
+    null,
+  );
+
+  return {
+    latitude: Number(coordinates.latitude.toFixed(6)),
+    longitude: Number(coordinates.longitude.toFixed(6)),
+    time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    start_date: startDate.toISOString().slice(0, 10),
+    end_date: now.toISOString().slice(0, 10),
+    days: normalizedDays,
+    latitude_band: latitudeBand,
+    summary: `The last ${normalizedDays} days included ${flareEvents.length} flare events and ${stormEvents.length} geomagnetic storms in demo mode.`,
+    counts: {
+      flare_events: flareEvents.length,
+      geomagnetic_storms: stormEvents.length,
+      total_events: events.length,
+    },
+    strongest: {
+      flare_class: strongestFlare?.global_severity?.class || null,
+      geomagnetic_kp: strongestStorm?.global_severity?.max_kp_index || null,
+    },
+    events,
+    freshness: {
+      status: "fresh",
+      checked_at: fetchedAt,
+      fetched_at: fetchedAt,
+      latest_fetched_at: fetchedAt,
+      expires_at: expiresAt,
+      age_seconds: 0,
+      seconds_until_expiry: 1800,
+      is_stale: false,
+      refresh_failed: false,
+      source_count: 1,
+      sources: {
+        demo: {
+          source: "demo",
+          status: "fresh",
+          fetched_at: fetchedAt,
+          expires_at: expiresAt,
+          ttl_seconds: 1800,
+          age_seconds: 0,
+          seconds_until_expiry: 1800,
+          is_stale: false,
+          cache_hit: false,
+          refresh_failed: false,
+        },
+      },
+    },
+    sources: ["demo"],
+  };
+}
+
+function buildDemoSurfaceSiteContext(guid) {
+  const record = guid ? demoPropertyRecords.get(guid) : null;
+  const propertyContext = record?.property_context;
+
+  if (!propertyContext) {
+    return {
+      available: false,
+      tone: "neutral",
+      summary:
+        "This remains an open-sky irradiance forecast because no saved parcel context is available in demo mode.",
+    };
+  }
+
+  const buildingCount = Number(propertyContext.building_context?.building_count || 0);
+  const canopyCount = Number(propertyContext.canopy_context?.canopy_count || 0);
+  const obstructionRisk = propertyContext.shade_context?.obstruction_risk || "low";
+  const terrainBias =
+    propertyContext.shade_context?.terrain_bias ||
+    propertyContext.terrain_context?.dominant_aspect ||
+    "unknown";
+  const directionalPressure = ["north", "south", "east", "west"].reduce((accumulator, direction) => {
+    accumulator[direction] = Number(
+      (
+        Number(propertyContext.building_context?.directional_pressure?.[direction] || 0) +
+        Number(propertyContext.canopy_context?.directional_pressure?.[direction] || 0)
+      ).toFixed(2),
+    );
+    return accumulator;
+  }, {});
+  const [strongestDirection, strongestPressure] = Object.entries(directionalPressure).sort(
+    (left, right) => right[1] - left[1],
+  )[0] || [null, 0];
+
+  return {
+    available: true,
+    tone: obstructionRisk === "high" ? "alert" : obstructionRisk === "moderate" ? "watch" : "low",
+    obstruction_risk: obstructionRisk,
+    building_count: buildingCount,
+    canopy_count: canopyCount,
+    terrain_bias: terrainBias,
+    strongest_direction: strongestDirection,
+    strongest_pressure: strongestPressure,
+    directional_pressure: directionalPressure,
+    summary: `Saved parcel context suggests ${obstructionRisk} obstruction pressure, strongest from the ${strongestDirection || "open"} side, from ${buildingCount} nearby buildings and ${canopyCount} canopy features in demo mode.`,
+    model_note:
+      "This still uses an open-sky irradiance forecast. Saved context only changes the interpretation layer in demo mode.",
+  };
+}
+
 function buildDemoSurfaceIrradiance(coordinates) {
   const seed = Math.abs(
     Math.round((Number(coordinates.latitude || 0) * 11 + Number(coordinates.longitude || 0) * 7) * 10),
@@ -1011,9 +1269,14 @@ function buildDemoSurfaceIrradiance(coordinates) {
   const peakDate = new Date(now.getTime() + peakHourOffset * 60 * 60 * 1000);
   const peakGhi = Number((Math.max(currentGhi, 720 + (seed % 3) * 65)).toFixed(1));
   const spikeLevel = peakGhi >= 850 ? "alert" : peakGhi >= 700 ? "watch" : "low";
-  const hourlyProfile = Array.from({ length: 8 }, (_, index) => {
+  const siteContext = buildDemoSurfaceSiteContext(coordinates.guid);
+  const hourlyProfile = Array.from({ length: 24 }, (_, index) => {
     const hourDate = new Date(now.getTime() + index * 60 * 60 * 1000);
-    const rawGhi = isDaylight ? Math.max(0, currentGhi + (index - 2) * 55) : 0;
+    const centerOffset = index - 6;
+    const dayCurve = Math.max(0, 1 - Math.abs(centerOffset) / 8);
+    const rawGhi = isDaylight
+      ? Math.max(0, currentGhi * 0.35 + dayCurve * peakGhi * 0.75)
+      : Math.max(0, dayCurve * peakGhi * 0.55);
     return {
       time: `${hourDate.getFullYear()}-${String(hourDate.getMonth() + 1).padStart(2, "0")}-${String(
         hourDate.getDate(),
@@ -1110,6 +1373,16 @@ function buildDemoSurfaceIrradiance(coordinates) {
         tone: spikeLevel,
         detail: `The next forecast peak is around ${hourlyProfile[Math.min(peakHourOffset, hourlyProfile.length - 1)]?.time || peakDate.toISOString()} near ${peakGhi.toFixed(0)} W/m².`,
       },
+      ...(siteContext.available
+        ? [
+            {
+              id: "site-context",
+              label: `Saved site context ${siteContext.obstruction_risk}`,
+              tone: siteContext.tone,
+              detail: `${siteContext.summary} ${siteContext.model_note}`,
+            },
+          ]
+        : []),
     ],
     summary:
       !isDaylight
@@ -1120,6 +1393,7 @@ function buildDemoSurfaceIrradiance(coordinates) {
             ? "Surface irradiance is elevated enough to watch through the next daylight window."
             : "Surface sunlight is stable right now for this property.",
     hourly_profile: hourlyProfile,
+    site_context: siteContext,
   };
 }
 
@@ -1441,13 +1715,31 @@ export async function fetchSpaceWeather(coordinates, options = {}) {
   });
 }
 
+export async function fetchSpaceWeatherHistory(coordinates, options = {}) {
+  if (demoMode) {
+    return buildDemoSpaceWeatherHistory(coordinates, {
+      days: options.days,
+    });
+  }
+
+  return request("/api/space-weather/history", {
+    ...coordinates,
+    days: options.days ?? 7,
+    force_refresh: Boolean(options.forceRefresh),
+  });
+}
+
 export async function fetchSurfaceIrradiance(coordinates, options = {}) {
   if (demoMode) {
-    return buildDemoSurfaceIrradiance(coordinates);
+    return buildDemoSurfaceIrradiance({
+      ...coordinates,
+      guid: options.guid,
+    });
   }
 
   return request("/api/surface-irradiance", {
     ...coordinates,
+    guid: options.guid ?? null,
     force_refresh: Boolean(options.forceRefresh),
   });
 }
@@ -1552,6 +1844,7 @@ export async function fetchSolarEstimate(formValues) {
     system_size,
     panel_efficiency,
     electricity_rate,
+    electricity_rate_mode,
     installation_cost_per_watt,
   } = formValues;
 
@@ -1564,6 +1857,7 @@ export async function fetchSolarEstimate(formValues) {
     system_size: roofSelection?.recommendedKw ?? system_size ?? null,
     panel_efficiency,
     electricity_rate,
+    electricity_rate_mode,
     installation_cost_per_watt,
     roof_selection: roofSelection ?? null,
   });
@@ -1574,6 +1868,7 @@ export async function saveSolarReport({
   reportName,
   panel_efficiency,
   electricity_rate,
+  electricity_rate_mode,
   installation_cost_per_watt,
   roofSelection,
 }) {
@@ -1583,6 +1878,7 @@ export async function saveSolarReport({
       reportName,
       panel_efficiency,
       electricity_rate,
+      electricity_rate_mode,
       installation_cost_per_watt,
       roofSelection,
     });
@@ -1593,6 +1889,7 @@ export async function saveSolarReport({
     report_name: reportName,
     panel_efficiency,
     electricity_rate,
+    electricity_rate_mode,
     installation_cost_per_watt,
     roof_selection: roofSelection ?? null,
   });

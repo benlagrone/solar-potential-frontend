@@ -44,6 +44,241 @@ const mapStyles = {
   },
 };
 
+function formatLabel(value) {
+  return String(value || "unknown")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function formatPressureValue(value) {
+  const normalized = Number(value || 0);
+  return Number.isFinite(normalized) ? normalized.toFixed(2) : "0.00";
+}
+
+function getPressureTone(value) {
+  const normalized = Number(value || 0);
+
+  if (normalized >= 1.35) {
+    return "alert";
+  }
+
+  if (normalized >= 0.55) {
+    return "watch";
+  }
+
+  if (normalized > 0) {
+    return "low";
+  }
+
+  return "neutral";
+}
+
+function buildCombinedDirectionalPressure(propertyContext) {
+  const buildingPressure = propertyContext?.building_context?.directional_pressure || {};
+  const canopyPressure = propertyContext?.canopy_context?.directional_pressure || {};
+
+  return {
+    north: (buildingPressure.north || 0) + (canopyPressure.north || 0),
+    east: (buildingPressure.east || 0) + (canopyPressure.east || 0),
+    south: (buildingPressure.south || 0) + (canopyPressure.south || 0),
+    west: (buildingPressure.west || 0) + (canopyPressure.west || 0),
+  };
+}
+
+function getStrongestDirection(pressureByDirection) {
+  const entries = Object.entries(pressureByDirection || {});
+  if (!entries.length) {
+    return "south";
+  }
+
+  return entries.reduce(
+    (best, current) => (current[1] > best[1] ? current : best),
+    entries[0],
+  )[0];
+}
+
+function buildNearestContextFeatures(propertyContext) {
+  const nearestBuilding = propertyContext?.building_context?.nearest_building || null;
+  const nearestCanopy = propertyContext?.canopy_context?.nearest_canopy || null;
+  const nearestFeatures = [
+    nearestBuilding
+      ? {
+          id: nearestBuilding.id,
+          label: nearestBuilding.name || "Nearby building",
+          type: "structure",
+          distance_m: nearestBuilding.distance_m,
+          direction: nearestBuilding.direction_bucket,
+          height_m: nearestBuilding.height_m,
+        }
+      : null,
+    nearestCanopy
+      ? {
+          id: nearestCanopy.id,
+          label: nearestCanopy.name || "Nearby canopy",
+          type: "canopy",
+          distance_m: nearestCanopy.distance_m,
+          direction: nearestCanopy.direction_bucket,
+          height_m: nearestCanopy.height_m,
+        }
+      : null,
+  ].filter(Boolean);
+
+  nearestFeatures.sort((left, right) => (left.distance_m || Infinity) - (right.distance_m || Infinity));
+  return nearestFeatures;
+}
+
+function DirectionPressureCell({ direction, value, strongestDirection }) {
+  const tone = getPressureTone(value);
+  const isStrongest = strongestDirection === direction;
+
+  return (
+    <div
+      className={[
+        "sun-pressure-cell",
+        `sun-pressure-cell-${tone}`,
+        isStrongest ? "sun-pressure-cell-strongest" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <span className="sun-pressure-direction">{direction.slice(0, 1).toUpperCase()}</span>
+      <strong>{formatPressureValue(value)}</strong>
+      <span>{formatLabel(direction)}</span>
+    </div>
+  );
+}
+
+function MapContextInsights({ propertyContext }) {
+  if (!propertyContext) {
+    return null;
+  }
+
+  const pressureByDirection = buildCombinedDirectionalPressure(propertyContext);
+  const strongestDirection = getStrongestDirection(pressureByDirection);
+  const nearestFeatures = buildNearestContextFeatures(propertyContext);
+  const nearestFeature = nearestFeatures[0] || null;
+  const terrain = propertyContext.terrain_context || {};
+  const shadeContext = propertyContext.shade_context || {};
+
+  return (
+    <div className="map-insight-grid">
+      <article className="map-insight-card">
+        <div className="map-insight-heading">
+          <div>
+            <span className="map-insight-label">Sun pressure</span>
+            <strong>Directional obstruction cues</strong>
+          </div>
+          <span className={`map-insight-pill map-insight-pill-${getPressureTone(pressureByDirection[strongestDirection])}`}>
+            Strongest from {formatLabel(strongestDirection)}
+          </span>
+        </div>
+
+        <div className="sun-pressure-compass" aria-label="Sun pressure compass">
+          <div className="sun-pressure-slot sun-pressure-slot-north">
+            <DirectionPressureCell
+              direction="north"
+              value={pressureByDirection.north}
+              strongestDirection={strongestDirection}
+            />
+          </div>
+          <div className="sun-pressure-slot sun-pressure-slot-west">
+            <DirectionPressureCell
+              direction="west"
+              value={pressureByDirection.west}
+              strongestDirection={strongestDirection}
+            />
+          </div>
+          <div className="sun-pressure-hub">
+            <span className="map-insight-label">Overall</span>
+            <strong>{formatLabel(shadeContext.obstruction_risk || "unknown")}</strong>
+            <p>
+              Combined from mapped building and canopy pressure in the current planning radius.
+            </p>
+          </div>
+          <div className="sun-pressure-slot sun-pressure-slot-east">
+            <DirectionPressureCell
+              direction="east"
+              value={pressureByDirection.east}
+              strongestDirection={strongestDirection}
+            />
+          </div>
+          <div className="sun-pressure-slot sun-pressure-slot-south">
+            <DirectionPressureCell
+              direction="south"
+              value={pressureByDirection.south}
+              strongestDirection={strongestDirection}
+            />
+          </div>
+        </div>
+
+        <p className="map-insight-copy">
+          Higher values mean stronger mapped building or canopy pressure from that side of the
+          property.
+        </p>
+      </article>
+
+      <article className="map-insight-card">
+        <div className="map-insight-heading">
+          <div>
+            <span className="map-insight-label">Nearest obstruction</span>
+            <strong>
+              {nearestFeature
+                ? `${formatLabel(nearestFeature.type)} on the ${formatLabel(nearestFeature.direction)} side`
+                : "No mapped obstruction nearby"}
+            </strong>
+          </div>
+          <span className={`map-insight-pill map-insight-pill-${getPressureTone(pressureByDirection[strongestDirection])}`}>
+            Terrain {formatLabel(terrain.dominant_aspect || "flat")}
+          </span>
+        </div>
+
+        <p className="map-insight-copy">
+          {nearestFeature
+            ? `${nearestFeature.label} is about ${Math.round(nearestFeature.distance_m || 0)} m away on the ${formatLabel(
+                nearestFeature.direction,
+              )} side, with terrain reading ${formatLabel(terrain.terrain_class || "unknown")} and ${formatLabel(
+                shadeContext.terrain_bias || "mostly neutral",
+              )} for open-sky light.`
+            : `No mapped building or canopy obstruction is being surfaced in this radius. Terrain still reads ${formatLabel(
+                terrain.terrain_class || "unknown",
+              )} with a ${formatLabel(terrain.dominant_aspect || "flat")} bias.`}
+        </p>
+
+        <div className="map-insight-list">
+          <div className="map-insight-row">
+            <strong>Nearest structure</strong>
+            <span>
+              {propertyContext.building_context?.nearest_building
+                ? `${Math.round(propertyContext.building_context.nearest_building.distance_m || 0)} m · ${formatLabel(
+                    propertyContext.building_context.nearest_building.direction_bucket,
+                  )} · ${propertyContext.building_context.nearest_building.height_m || 0} m tall`
+                : "No nearby mapped structure"}
+            </span>
+          </div>
+          <div className="map-insight-row">
+            <strong>Nearest canopy</strong>
+            <span>
+              {propertyContext.canopy_context?.nearest_canopy
+                ? `${Math.round(propertyContext.canopy_context.nearest_canopy.distance_m || 0)} m · ${formatLabel(
+                    propertyContext.canopy_context.nearest_canopy.direction_bucket,
+                  )} · ${propertyContext.canopy_context.nearest_canopy.height_m || 0} m tall`
+                : "No nearby mapped canopy"}
+            </span>
+          </div>
+          <div className="map-insight-row">
+            <strong>Local relief</strong>
+            <span>
+              {terrain.local_relief_m != null
+                ? `${terrain.local_relief_m} m relief · ${terrain.slope_percent || 0}% slope`
+                : "Terrain relief unavailable"}
+            </span>
+          </div>
+        </div>
+      </article>
+    </div>
+  );
+}
+
 function clampZoom(value, maxZoom) {
   return Math.min(value, maxZoom);
 }
@@ -720,6 +955,10 @@ export default function PropertyMap({
           ) : null}
         </MapContainer>
       </div>
+
+      {(isSolarMode || isGardenMode) && propertyContext ? (
+        <MapContextInsights propertyContext={propertyContext} />
+      ) : null}
 
       <div className="map-note-row">
         <span className="map-note">

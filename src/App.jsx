@@ -9,6 +9,7 @@ import {
   fetchPropertyPreview,
   fetchSolarEstimate,
   fetchSpaceWeather,
+  fetchSpaceWeatherHistory,
   fetchSurfaceIrradiance,
   listPropertyRecords,
   reverseGeocodeCoordinates,
@@ -41,6 +42,24 @@ const monthLabels = [
   ["12", "Dec"],
 ];
 
+const sourceLabels = {
+  "arcgis-forward": "ArcGIS forward geocoder",
+  "arcgis-reverse": "ArcGIS reverse geocoder",
+  demo: "Demo data",
+  "nasa-donki": "NASA DONKI",
+  "nasa-donki-flares": "NASA DONKI flares",
+  "nasa-donki-geomagnetic-storms": "NASA DONKI geomagnetic storms",
+  "noaa-alerts": "NOAA alerts",
+  "noaa-drap": "NOAA D-RAP",
+  "noaa-glotec": "NOAA GloTEC",
+  "noaa-goes-xray": "NOAA GOES X-ray",
+  "noaa-ovation-aurora": "NOAA OVATION aurora",
+  "noaa-scales": "NOAA scales",
+  "noaa-solar-wind": "NOAA solar wind",
+  "open-meteo-forecast": "Open-Meteo forecast",
+  "open-meteo-historical-weather": "Open-Meteo historical weather",
+};
+
 const initialForm = {
   address: {
     street: "",
@@ -52,6 +71,7 @@ const initialForm = {
   system_size: 7,
   panel_efficiency: 0.2,
   electricity_rate: 0.16,
+  electricity_rate_mode: "auto",
   installation_cost_per_watt: 3,
 };
 
@@ -169,6 +189,15 @@ function formatLabel(value) {
   return String(value || "unknown")
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function formatSourceLabel(value) {
+  const sourceId = String(value || "").trim();
+  if (!sourceId) {
+    return "Unknown source";
+  }
+
+  return sourceLabels[sourceId] || formatLabel(sourceId);
 }
 
 function getCompassDirection(azimuth) {
@@ -508,7 +537,49 @@ function getFreshnessMessage(freshness) {
   return `${sourceLabel} last refreshed ${refreshedAt}.${expiryWindow}`;
 }
 
-function LiveDataToolbar({ freshness, loading, error, onRefresh }) {
+function getSourceList(sources, freshness) {
+  const mergedSources = [
+    ...(Array.isArray(sources) ? sources : []),
+    ...Object.keys((freshness && freshness.sources) || {}),
+  ];
+  const uniqueSources = [];
+  const seenSources = new Set();
+
+  mergedSources.forEach((source) => {
+    const normalized = String(source || "").trim();
+    if (!normalized || seenSources.has(normalized)) {
+      return;
+    }
+
+    seenSources.add(normalized);
+    uniqueSources.push(normalized);
+  });
+
+  return uniqueSources;
+}
+
+function LiveSourceSummary({ sources, freshness }) {
+  const sourceList = getSourceList(sources, freshness);
+
+  if (!sourceList.length) {
+    return null;
+  }
+
+  return (
+    <div className="live-source-group">
+      <span className="live-source-label">Sources</span>
+      <div className="condition-badge-row live-source-badges">
+        {sourceList.map((source) => (
+          <span className="soft-badge soft-badge-neutral live-source-badge" key={source}>
+            {formatSourceLabel(source)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LiveDataToolbar({ freshness, sources, loading, error, onRefresh }) {
   return (
     <div className="live-data-toolbar">
       <div className="live-data-copy">
@@ -525,6 +596,7 @@ function LiveDataToolbar({ freshness, loading, error, onRefresh }) {
           ) : null}
         </div>
         <p className="live-data-note">{getFreshnessMessage(freshness)}</p>
+        <LiveSourceSummary sources={sources} freshness={freshness} />
         {error ? <p className="live-data-warning">{error}</p> : null}
         <p className="live-data-subnote">
           Auto refresh runs every 2 minutes while this page stays open.
@@ -564,6 +636,249 @@ function ReasonList({ reasons, emptyCopy }) {
   );
 }
 
+function IrradianceSparkline({ hourlyProfile }) {
+  const points = (hourlyProfile || []).slice(0, 24);
+
+  if (points.length < 2) {
+    return null;
+  }
+
+  const width = 720;
+  const height = 220;
+  const paddingX = 18;
+  const paddingY = 18;
+  const chartWidth = width - paddingX * 2;
+  const chartHeight = height - paddingY * 2;
+  const maxValue = Math.max(...points.map((entry) => Number(entry.ghi_w_m2 || 0)), 1);
+  const mappedPoints = points.map((entry, index) => {
+    const x =
+      paddingX + (chartWidth * index) / Math.max(points.length - 1, 1);
+    const y =
+      height -
+      paddingY -
+      (Math.max(Number(entry.ghi_w_m2 || 0), 0) / maxValue) * chartHeight;
+    return {
+      ...entry,
+      x,
+      y,
+    };
+  });
+  const linePoints = mappedPoints.map((entry) => `${entry.x},${entry.y}`).join(" ");
+  const areaPoints = [
+    `${paddingX},${height - paddingY}`,
+    ...mappedPoints.map((entry) => `${entry.x},${entry.y}`),
+    `${paddingX + chartWidth},${height - paddingY}`,
+  ].join(" ");
+  const peakPoint = mappedPoints.reduce(
+    (best, entry) => (Number(entry.ghi_w_m2 || 0) > Number(best?.ghi_w_m2 || 0) ? entry : best),
+    mappedPoints[0],
+  );
+  const axisPoints = mappedPoints.filter(
+    (_, index) => index % 4 === 0 || index === mappedPoints.length - 1,
+  );
+
+  return (
+    <article className="guidance-card irradiance-sparkline-card">
+      <div className="irradiance-sparkline-meta">
+        <div>
+          <strong>24-hour sunlight curve</strong>
+          <p>Open-sky global horizontal irradiance across the next forecast day.</p>
+        </div>
+        <div className="condition-badge-row">
+          <span className="soft-badge soft-badge-neutral">
+            Peak {formatLocalHour(peakPoint?.time)} · {formatNumber(peakPoint?.ghi_w_m2 || 0, 0)} W/m²
+          </span>
+          <span className="soft-badge soft-badge-neutral">
+            Now {formatNumber(points[0]?.ghi_w_m2 || 0, 0)} W/m²
+          </span>
+        </div>
+      </div>
+
+      <div className="irradiance-sparkline-frame">
+        <svg
+          className="irradiance-sparkline"
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label="24-hour irradiance sparkline"
+        >
+          <defs>
+            <linearGradient id="irradiance-area-gradient" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="rgba(243, 194, 91, 0.55)" />
+              <stop offset="100%" stopColor="rgba(31, 108, 92, 0.08)" />
+            </linearGradient>
+          </defs>
+          {[0.25, 0.5, 0.75].map((fraction) => {
+            const y = height - paddingY - chartHeight * fraction;
+            return (
+              <line
+                key={fraction}
+                x1={paddingX}
+                x2={paddingX + chartWidth}
+                y1={y}
+                y2={y}
+                className="irradiance-grid-line"
+              />
+            );
+          })}
+          <polygon points={areaPoints} className="irradiance-area-fill" />
+          <polyline points={linePoints} className="irradiance-line" />
+          <circle
+            cx={mappedPoints[0]?.x || paddingX}
+            cy={mappedPoints[0]?.y || height - paddingY}
+            r="5"
+            className="irradiance-point-current"
+          />
+          <circle
+            cx={peakPoint?.x || paddingX}
+            cy={peakPoint?.y || height - paddingY}
+            r="5"
+            className="irradiance-point-peak"
+          />
+        </svg>
+      </div>
+
+      <div className="irradiance-sparkline-axis">
+        {axisPoints.map((entry) => (
+          <span key={entry.time}>{formatLocalHour(entry.time)}</span>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function SpaceWeatherHistoryPanel({
+  data,
+  loading,
+  error,
+  days,
+  onDaysChange,
+  onRefresh,
+}) {
+  const visibleEvents = (data?.events || []).slice(0, 18);
+  const hiddenCount = Math.max((data?.events?.length || 0) - visibleEvents.length, 0);
+
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Recent history</p>
+          <h2>NASA DONKI event timeline</h2>
+        </div>
+        <p className="panel-copy">
+          This complements the live alert view with recent flare and geomagnetic activity around the
+          property’s latitude band.
+        </p>
+      </div>
+
+      <div className="history-range-switch" role="tablist" aria-label="History range">
+        {[7, 30, 90].map((candidateDays) => (
+          <button
+            key={candidateDays}
+            className={`history-range-button ${days === candidateDays ? "history-range-button-active" : ""}`}
+            type="button"
+            onClick={() => onDaysChange(candidateDays)}
+          >
+            Last {candidateDays} days
+          </button>
+        ))}
+      </div>
+
+      {loading && !data ? (
+        <div className="status-card status-card-muted">
+          <span className="status-label">History status</span>
+          <strong>Loading event history</strong>
+          <p>Pulling recent flare and geomagnetic events for this property.</p>
+        </div>
+      ) : error && !data ? (
+        <div className="status-card status-card-muted">
+          <span className="status-label">History status</span>
+          <strong>Space-weather history unavailable</strong>
+          <p>{error}</p>
+        </div>
+      ) : data ? (
+        <>
+          <p className="summary-copy">{data.summary}</p>
+          <LiveDataToolbar
+            freshness={data.freshness}
+            sources={data.sources}
+            loading={loading}
+            error={error}
+            onRefresh={onRefresh}
+          />
+
+          <div className="stats-grid">
+            <StatCard
+              label="Window"
+              value={`${data.days || days} days`}
+              detail={`${data.start_date || "Unknown"} to ${data.end_date || "Unknown"}`}
+            />
+            <StatCard
+              label="Event count"
+              value={String(data.counts?.total_events || 0)}
+              detail={`${data.counts?.flare_events || 0} flares · ${data.counts?.geomagnetic_storms || 0} storms`}
+            />
+            <StatCard
+              label="Strongest flare"
+              value={data.strongest?.flare_class || "None"}
+              detail={`Latitude band ${formatLabel(data.latitude_band)}`}
+            />
+            <StatCard
+              label="Strongest storm"
+              value={
+                data.strongest?.geomagnetic_kp != null
+                  ? `Kp ${formatNumber(data.strongest.geomagnetic_kp, 1)}`
+                  : "None"
+              }
+              detail="Based on DONKI storm intervals in the selected window."
+            />
+          </div>
+
+          {visibleEvents.length ? (
+            <div className="history-timeline">
+              {visibleEvents.map((event) => (
+                <article className="history-event-card" key={event.id}>
+                  <div className="history-event-meta">
+                    <span className="status-label">
+                      {event.kind === "flare" ? "Solar flare" : "Geomagnetic storm"}
+                    </span>
+                    <strong>{event.label}</strong>
+                    <span>{formatDateTime(event.local_time || event.observed_at)}</span>
+                  </div>
+                  <div className="history-event-copy">
+                    <div className="condition-badge-row">
+                      <LevelBadge label={`Global ${formatLabel(event.tone)}`} tone={event.tone} />
+                      <LevelBadge
+                        label={event.local_relevance?.label || "Local relevance"}
+                        tone={event.local_relevance?.tone || "neutral"}
+                      />
+                    </div>
+                    <p>{event.detail}</p>
+                    {event.local_relevance?.detail ? (
+                      <p className="history-subnote">{event.local_relevance.detail}</p>
+                    ) : null}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state">
+              <h3>No recent events</h3>
+              <p>No flare or geomagnetic storm events were returned for this history window.</p>
+            </div>
+          )}
+
+          {hiddenCount ? (
+            <p className="history-subnote">
+              Showing the most recent {visibleEvents.length} events. {hiddenCount} older events are
+              hidden in this first pass.
+            </p>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 function SpaceWeatherPanel({ data, loading, error, onRefresh }) {
   const drap = data?.local?.drap;
   const glotec = data?.local?.glotec;
@@ -598,6 +913,7 @@ function SpaceWeatherPanel({ data, loading, error, onRefresh }) {
           <p className="summary-copy">{data.summary}</p>
           <LiveDataToolbar
             freshness={data.freshness}
+            sources={data.sources}
             loading={loading}
             error={error}
             onRefresh={onRefresh}
@@ -776,6 +1092,8 @@ function SpaceWeatherPanel({ data, loading, error, onRefresh }) {
 }
 
 function SurfaceIrradiancePanel({ data, loading, error, onRefresh }) {
+  const siteContext = data?.site_context;
+
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -806,6 +1124,7 @@ function SurfaceIrradiancePanel({ data, loading, error, onRefresh }) {
           <p className="summary-copy">{data.summary}</p>
           <LiveDataToolbar
             freshness={data.freshness}
+            sources={data.source ? [data.source] : []}
             loading={loading}
             error={error}
             onRefresh={onRefresh}
@@ -820,10 +1139,6 @@ function SurfaceIrradiancePanel({ data, loading, error, onRefresh }) {
             <LevelBadge
               label={data.is_daylight ? "Daylight" : "Night"}
               tone={data.is_daylight ? "watch" : "neutral"}
-            />
-            <LevelBadge
-              label={`Source ${formatLabel(data.source)}`}
-              tone="neutral"
             />
           </div>
 
@@ -872,19 +1187,42 @@ function SurfaceIrradiancePanel({ data, loading, error, onRefresh }) {
                   : "Ramp window unavailable"
               }
             />
+            <StatCard
+              label="Site context"
+              value={
+                siteContext?.available
+                  ? formatLabel(siteContext.obstruction_risk || "active")
+                  : "Open sky only"
+              }
+              detail={
+                siteContext?.available
+                  ? `${siteContext.building_count || 0} buildings · ${siteContext.canopy_count || 0} canopy features`
+                  : "No saved parcel context attached to this forecast."
+              }
+            />
           </div>
 
           <div className="guidance-stack solar-insight-stack">
+            <IrradianceSparkline hourlyProfile={data.hourly_profile} />
+
             <article className="guidance-card">
               <strong>Forecast window</strong>
               <div className="condition-badge-row">
-                {(data.hourly_profile || []).slice(0, 6).map((entry) => (
+                {(data.hourly_profile || []).slice(0, 8).map((entry) => (
                   <span className="soft-badge soft-badge-neutral" key={entry.time}>
                     {formatLocalHour(entry.time)} · {formatNumber(entry.ghi_w_m2 || 0, 0)} W/m²
                   </span>
                 ))}
               </div>
             </article>
+
+            {siteContext?.available ? (
+              <article className="guidance-card">
+                <strong>Saved site context</strong>
+                <p>{siteContext.summary}</p>
+                <p className="live-data-subnote">{siteContext.model_note}</p>
+              </article>
+            ) : null}
 
             <article className="guidance-card">
               <strong>Why this matters here</strong>
@@ -1692,6 +2030,10 @@ export default function App() {
   const [spaceWeather, setSpaceWeather] = useState(null);
   const [spaceWeatherLoading, setSpaceWeatherLoading] = useState(false);
   const [spaceWeatherError, setSpaceWeatherError] = useState("");
+  const [spaceWeatherHistory, setSpaceWeatherHistory] = useState(null);
+  const [spaceWeatherHistoryLoading, setSpaceWeatherHistoryLoading] = useState(false);
+  const [spaceWeatherHistoryError, setSpaceWeatherHistoryError] = useState("");
+  const [spaceWeatherHistoryDays, setSpaceWeatherHistoryDays] = useState(7);
   const [surfaceIrradiance, setSurfaceIrradiance] = useState(null);
   const [surfaceIrradianceLoading, setSurfaceIrradianceLoading] = useState(false);
   const [surfaceIrradianceError, setSurfaceIrradianceError] = useState("");
@@ -1754,8 +2096,10 @@ export default function App() {
   const activeModeContent = modeContentByMode[activeBuddy];
   const landingContent = landingContentByPage[activePage];
   const spaceWeatherRef = useRef(spaceWeather);
+  const spaceWeatherHistoryRef = useRef(spaceWeatherHistory);
   const surfaceIrradianceRef = useRef(surfaceIrradiance);
   const spaceWeatherRequestIdRef = useRef(0);
+  const spaceWeatherHistoryRequestIdRef = useRef(0);
   const surfaceIrradianceRequestIdRef = useRef(0);
   const hasTrackedModePageViewRef = useRef(false);
 
@@ -1781,6 +2125,7 @@ export default function App() {
     try {
       const nextSurfaceIrradiance = await fetchSurfaceIrradiance(coordinates, {
         forceRefresh,
+        guid: propertyRecordGuid,
       });
 
       if (requestId !== surfaceIrradianceRequestIdRef.current) {
@@ -1859,9 +2204,69 @@ export default function App() {
     }
   };
 
+  const loadSpaceWeatherHistory = async ({
+    forceRefresh = false,
+    days = spaceWeatherHistoryDays,
+  } = {}) => {
+    if (!propertyPreview?.latitude || !propertyPreview?.longitude) {
+      return;
+    }
+
+    const coordinates = {
+      latitude: propertyPreview.latitude,
+      longitude: propertyPreview.longitude,
+    };
+    const requestId = spaceWeatherHistoryRequestIdRef.current + 1;
+    const isSameRequest =
+      coordinatesMatch(spaceWeatherHistoryRef.current, coordinates) &&
+      Number(spaceWeatherHistoryRef.current?.days || 0) === Number(days);
+
+    spaceWeatherHistoryRequestIdRef.current = requestId;
+    if (!isSameRequest) {
+      setSpaceWeatherHistory(null);
+    }
+    setSpaceWeatherHistoryLoading(true);
+    setSpaceWeatherHistoryError("");
+
+    try {
+      const nextSpaceWeatherHistory = await fetchSpaceWeatherHistory(coordinates, {
+        days,
+        forceRefresh,
+      });
+
+      if (requestId !== spaceWeatherHistoryRequestIdRef.current) {
+        return;
+      }
+
+      setSpaceWeatherHistory(nextSpaceWeatherHistory);
+      setSpaceWeatherHistoryError("");
+    } catch (historyError) {
+      if (requestId !== spaceWeatherHistoryRequestIdRef.current) {
+        return;
+      }
+
+      if (!isSameRequest) {
+        setSpaceWeatherHistory(null);
+      }
+      setSpaceWeatherHistoryError(
+        historyError?.message || "Unable to load recent space-weather event history.",
+      );
+    } finally {
+      if (requestId !== spaceWeatherHistoryRequestIdRef.current) {
+        return;
+      }
+
+      setSpaceWeatherHistoryLoading(false);
+    }
+  };
+
   useEffect(() => {
     spaceWeatherRef.current = spaceWeather;
   }, [spaceWeather]);
+
+  useEffect(() => {
+    spaceWeatherHistoryRef.current = spaceWeatherHistory;
+  }, [spaceWeatherHistory]);
 
   useEffect(() => {
     surfaceIrradianceRef.current = surfaceIrradiance;
@@ -1929,17 +2334,24 @@ export default function App() {
       setSpaceWeather(null);
       setSpaceWeatherLoading(false);
       setSpaceWeatherError("");
+      spaceWeatherHistoryRequestIdRef.current += 1;
+      setSpaceWeatherHistory(null);
+      setSpaceWeatherHistoryLoading(false);
+      setSpaceWeatherHistoryError("");
       return;
     }
 
     if (!isSpaceWeatherPage) {
       spaceWeatherRequestIdRef.current += 1;
       setSpaceWeatherLoading(false);
+      spaceWeatherHistoryRequestIdRef.current += 1;
+      setSpaceWeatherHistoryLoading(false);
       return;
     }
 
     loadSpaceWeather();
-  }, [isSpaceWeatherPage, propertyPreview?.latitude, propertyPreview?.longitude]);
+    loadSpaceWeatherHistory();
+  }, [isSpaceWeatherPage, propertyPreview?.latitude, propertyPreview?.longitude, spaceWeatherHistoryDays]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1957,10 +2369,11 @@ export default function App() {
 
       loadSpaceWeather();
       loadSurfaceIrradiance();
+      loadSpaceWeatherHistory();
     }, 120000);
 
     return () => window.clearInterval(intervalId);
-  }, [isSpaceWeatherPage, propertyPreview?.latitude, propertyPreview?.longitude]);
+  }, [isSpaceWeatherPage, propertyPreview?.latitude, propertyPreview?.longitude, spaceWeatherHistoryDays]);
 
   useEffect(() => {
     if (!propertyPreview?.latitude || !propertyPreview?.longitude) {
@@ -2215,6 +2628,10 @@ export default function App() {
     setSpaceWeather(null);
     setSpaceWeatherError("");
     setSpaceWeatherLoading(false);
+    setSpaceWeatherHistory(null);
+    setSpaceWeatherHistoryError("");
+    setSpaceWeatherHistoryLoading(false);
+    setSpaceWeatherHistoryDays(7);
     setSurfaceIrradiance(null);
     setSurfaceIrradianceError("");
     setSurfaceIrradianceLoading(false);
@@ -2362,6 +2779,10 @@ export default function App() {
     setSpaceWeather(null);
     setSpaceWeatherError("");
     setSpaceWeatherLoading(false);
+    setSpaceWeatherHistory(null);
+    setSpaceWeatherHistoryError("");
+    setSpaceWeatherHistoryLoading(false);
+    setSpaceWeatherHistoryDays(7);
     setSurfaceIrradiance(null);
     setSurfaceIrradianceError("");
     setSurfaceIrradianceLoading(false);
@@ -2696,6 +3117,7 @@ export default function App() {
         guid: propertyRecordGuid,
         panel_efficiency: form.panel_efficiency,
         electricity_rate: form.electricity_rate,
+        electricity_rate_mode: form.electricity_rate_mode,
         installation_cost_per_watt: form.installation_cost_per_watt,
         roofSelection,
       });
@@ -2864,7 +3286,30 @@ export default function App() {
 
                 <div className="field-row">
                   <label>
-                    Electricity rate ($/kWh)
+                    Electricity rate mode
+                    <select
+                      value={form.electricity_rate_mode}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          electricity_rate_mode: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="auto">Auto utility rate</option>
+                      <option value="manual">Manual override</option>
+                    </select>
+                    <span className="field-hint">
+                      {form.electricity_rate_mode === "auto"
+                        ? "Use a utility-aware residential average when available."
+                        : "Ignore utility matching and use the manual input below."}
+                    </span>
+                  </label>
+
+                  <label>
+                    {form.electricity_rate_mode === "auto"
+                      ? "Fallback rate ($/kWh)"
+                      : "Electricity rate ($/kWh)"}
                     <input
                       type="number"
                       min="0"
@@ -2873,6 +3318,11 @@ export default function App() {
                       value={form.electricity_rate}
                       onChange={(event) => updateNumber("electricity_rate", event.target.value)}
                     />
+                    <span className="field-hint">
+                      {form.electricity_rate_mode === "auto"
+                        ? "Used only when utility-aware pricing is unavailable."
+                        : "Used directly for annual savings and payback."}
+                    </span>
                   </label>
 
                   <label>
@@ -3059,6 +3509,15 @@ export default function App() {
                       detail={`25-year savings ${formatCurrency(result.total_savings_25_years)}`}
                     />
                     <StatCard
+                      label="Rate used"
+                      value={`$${formatNumber(result.electricity_rate_used || form.electricity_rate, 2)}/kWh`}
+                      detail={
+                        result.utility_context?.utility_name
+                          ? `${result.rate_assumption_source} via ${result.utility_context.utility_name}`
+                          : result.rate_assumption_source || "Manual input"
+                      }
+                    />
+                    <StatCard
                       label="Payback"
                       value={
                         result.payback_period
@@ -3163,6 +3622,10 @@ export default function App() {
                       <strong>{result.production_model?.label || "Unknown"}</strong>
                     </article>
                     <article className="info-card">
+                      <span>Utility context</span>
+                      <strong>{result.utility_context?.utility_name || "Manual or fallback rate"}</strong>
+                    </article>
+                    <article className="info-card">
                       <span>Peak month</span>
                       <strong>
                         {getMonthLabel(result.peak_month?.month)}{" "}
@@ -3254,6 +3717,57 @@ export default function App() {
                           ))}
                         </div>
                       ) : null}
+                    </article>
+
+                    <article className="guidance-card">
+                      <div className="insight-heading">
+                        <strong>Utility-aware savings</strong>
+                        <span className="soft-badge">
+                          {result.electricity_rate_mode === "auto" ? "Auto rate" : "Manual rate"}
+                        </span>
+                      </div>
+                      <p>
+                        {result.utility_context?.utility_name
+                          ? `${result.rate_assumption_source} is active for this estimate through ${result.utility_context.utility_name}.`
+                          : `${result.rate_assumption_source || "Manual input"} is active for this estimate.`}
+                      </p>
+                      <div className="status-list">
+                        <div className="status-row">
+                          <strong>Rate used</strong>
+                          <p>
+                            ${formatNumber(result.electricity_rate_used || form.electricity_rate, 3)}/kWh in the
+                            savings and payback model.
+                            {result.electricity_rate_mode === "auto" &&
+                            result.electricity_rate_input != null
+                              ? ` Manual fallback is $${formatNumber(result.electricity_rate_input, 3)}/kWh.`
+                              : ""}
+                          </p>
+                        </div>
+                        {result.utility_context ? (
+                          <div className="status-row">
+                            <strong>Utility match</strong>
+                            <p>
+                              {result.utility_context.rate_name || "Residential rate"} from{" "}
+                              {result.utility_context.utility_name || "the matched utility"}
+                              {result.utility_context.rate_effective_date
+                                ? ` as of ${result.utility_context.rate_effective_date}`
+                                : ""}.
+                            </p>
+                          </div>
+                        ) : null}
+                        {result.utility_context?.net_metering_status ? (
+                          <div className="status-row">
+                            <strong>Export context</strong>
+                            <p>
+                              Net metering reads as{" "}
+                              {formatLabel(result.utility_context.net_metering_status)}.
+                              {result.utility_context.export_compensation_type
+                                ? ` ${result.utility_context.export_compensation_type}.`
+                                : ""}
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
                     </article>
 
                     <article className="guidance-card">
@@ -3563,6 +4077,24 @@ export default function App() {
               error={surfaceIrradianceError}
               onRefresh={() => {
                 loadSurfaceIrradiance({ forceRefresh: true });
+              }}
+            />
+          ) : null}
+
+          {isSpaceWeatherPage ? (
+            <SpaceWeatherHistoryPanel
+              data={spaceWeatherHistory}
+              loading={spaceWeatherHistoryLoading}
+              error={spaceWeatherHistoryError}
+              days={spaceWeatherHistoryDays}
+              onDaysChange={(nextDays) => {
+                setSpaceWeatherHistoryDays(nextDays);
+              }}
+              onRefresh={() => {
+                loadSpaceWeatherHistory({
+                  forceRefresh: true,
+                  days: spaceWeatherHistoryDays,
+                });
               }}
             />
           ) : null}
