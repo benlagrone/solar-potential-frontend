@@ -189,6 +189,24 @@ function resolveTemperatureFactor(avgAllSkyRadiation) {
   return 0.96;
 }
 
+function demoAspectToAzimuth(aspect) {
+  const normalized = String(aspect || "").toLowerCase();
+
+  if (normalized.includes("east")) {
+    return 90;
+  }
+
+  if (normalized.includes("west")) {
+    return 270;
+  }
+
+  if (normalized.includes("north")) {
+    return 0;
+  }
+
+  return 180;
+}
+
 function buildDemoProductionModel({
   systemSizeKw,
   monthlyAllSky,
@@ -196,15 +214,52 @@ function buildDemoProductionModel({
   panelEfficiency,
   electricityRate,
   roofSelection,
+  propertyContext,
+  sizingSource,
 }) {
   const normalizedPanelEfficiency = normalizePanelEfficiency(panelEfficiency);
+  const siteContextAvailable = Boolean(propertyContext);
+  const obstructionRisk =
+    propertyContext?.shade_context?.obstruction_risk ||
+    propertyContext?.building_context?.obstruction_risk ||
+    "low";
+  const siteLossFactor = siteContextAvailable
+    ? obstructionRisk === "high"
+      ? 0.92
+      : obstructionRisk === "moderate"
+        ? 0.95
+        : 0.98
+    : 1;
+  const terrainAspect = propertyContext?.terrain_context?.dominant_aspect;
+  const terrainSlope = Number(propertyContext?.terrain_context?.slope_percent || 0);
+  const assumedAzimuth = roofSelection ? 180 : demoAspectToAzimuth(terrainAspect);
+  const assumedTilt = Number(clamp(30 + Math.min(terrainSlope * 0.35, 5.5), 8, 45).toFixed(1));
+  const modelId =
+    sizingSource === "roof-geometry"
+      ? "roof-backed-monthly-v2"
+      : sizingSource === "address-context"
+        ? "address-context-monthly-v1"
+        : "manual-screening-monthly-v1";
+  const modelLabel =
+    sizingSource === "roof-geometry"
+      ? "Roof-backed monthly model"
+      : sizingSource === "address-context"
+        ? "Address-context monthly model"
+        : "Manual screening monthly model";
+  const modelDescription =
+    sizingSource === "roof-geometry"
+      ? "Uses month-by-month solar resource data, roof-backed DC sizing, inferred roof-facing assumptions, and first-pass site-context losses."
+      : sizingSource === "address-context"
+        ? "Uses month-by-month solar resource data, address-level orientation and site-context assumptions, and the current system-size input until a roof polygon is drawn."
+        : "Uses month-by-month solar resource data, the current manual system-size input, and generic orientation and site-loss fallbacks until property context is saved.";
   const lossFactors = {
     inverter: 0.96,
     electrical: 0.98,
     soiling: 0.97,
     availability: 0.99,
     temperature: resolveTemperatureFactor(avgAllSkyRadiation),
-    layout: roofSelection ? 0.96 : 0.9,
+    layout: roofSelection ? 0.96 : siteContextAvailable ? 0.92 : 0.9,
+    site_context: siteLossFactor,
   };
   const performanceRatio = Number(
     Object.values(lossFactors)
@@ -240,14 +295,43 @@ function buildDemoProductionModel({
     Object.entries(monthlyProduction).sort((left, right) => left[1] - right[1])[0] || [];
 
   return {
-    id: "roof-backed-monthly-v1",
-    label: "Roof-backed monthly model",
-    description:
-      "Uses month-by-month solar resource data, roof-backed DC sizing, and explicit system-loss assumptions instead of a single annualized screening multiplier.",
+    id: modelId,
+    label: modelLabel,
+    description: modelDescription,
+    estimate_mode:
+      sizingSource === "roof-geometry"
+        ? "roof-backed"
+        : sizingSource === "address-context"
+          ? "address-context"
+          : "manual-screening",
+    sizing_source: sizingSource,
     roof_coverage_factor: ROOF_COVERAGE_FACTOR,
     effective_panel_efficiency: normalizedPanelEfficiency,
     performance_ratio: performanceRatio,
     loss_factors: lossFactors,
+    assumed_tilt: assumedTilt,
+    assumed_azimuth: assumedAzimuth,
+    tilt_source: siteContextAvailable
+      ? "latitude baseline nudged by local terrain aspect"
+      : "latitude fallback",
+    azimuth_source: roofSelection
+      ? "roof polygon dominant edge with solar-facing side selection"
+      : siteContextAvailable
+        ? "terrain-aware fallback"
+        : "south-facing fallback",
+    site_context_available: siteContextAvailable,
+    site_context_summary: propertyContext?.summary || null,
+    site_context_label: propertyContext?.match_envelope?.label || null,
+    site_context_source: propertyContext?.match_envelope?.source || null,
+    obstruction_risk: obstructionRisk,
+    canopy_count: propertyContext?.canopy_context?.canopy_count ?? null,
+    nearest_canopy_distance_m: propertyContext?.canopy_context?.nearest_canopy?.distance_m ?? null,
+    terrain_class: propertyContext?.terrain_context?.terrain_class || null,
+    terrain_aspect: terrainAspect || null,
+    terrain_bias: propertyContext?.shade_context?.terrain_bias || null,
+    building_pressure_score: propertyContext?.shade_context?.building_pressure_score ?? null,
+    canopy_pressure_score: propertyContext?.shade_context?.canopy_pressure_score ?? null,
+    modeled_site_losses_percent: Number(((1 - siteLossFactor) * 100).toFixed(1)),
     monthly_production: monthlyProduction,
     monthly_savings: monthlySavings,
     annual_production: annualProduction,
@@ -284,7 +368,9 @@ function buildDemoSolarAssumptions({
         ).toLocaleString()} sq ft, ${(normalizedPanelEfficiency * 100).toFixed(0)}% panel efficiency, and a ${(
           ROOF_COVERAGE_FACTOR * 100
         ).toFixed(0)}% roof coverage allowance.`
-      : `System size uses a manual input of ${systemSizeKw.toFixed(1)} kW.`,
+      : sizingSource === "address-context"
+        ? `Address-only estimate uses a ${systemSizeKw.toFixed(1)} kW system size input while saved property context refines orientation and site-loss assumptions. Roof area and roof capacity are still not measured until a roof polygon is drawn.`
+        : `System size uses a manual input of ${systemSizeKw.toFixed(1)} kW.`,
     `Monthly production uses month-by-month solar irradiance with an estimated ${(
       (productionModel?.performance_ratio || 0) * 100
     ).toFixed(0)}% performance ratio.`,
@@ -292,7 +378,12 @@ function buildDemoSolarAssumptions({
     `Electricity rate is assumed at $${electricity_rate.toFixed(2)}/kWh from ${rate_assumption_source}.`,
     `Installed cost is assumed at $${installation_cost_per_watt.toFixed(2)}/W.`,
     "Solar resource data source is demo with high quality.",
-    "Shading, azimuth, roof pitch, utility tariff detail, and roof obstructions are not modeled yet.",
+    productionModel?.site_context_available
+      ? `Nearby building, vegetation, and terrain context contribute about ${(
+          productionModel.modeled_site_losses_percent || 0
+        ).toFixed(1)}% extra modeled site losses in this planning pass.`
+      : "Site-context losses still use a generic fallback because no saved property context is available yet.",
+    "Utility tariff detail, parcel-certified roof pitch, and roof obstructions are not fully modeled yet.",
     "This is a stronger planning model, but it is still not an installer quote or permit-ready design.",
   ];
 }
@@ -304,6 +395,9 @@ function buildDemoSolarConfidence({ matchQuality, sizingSource, roofSelection, p
   if (sizingSource === "roof-geometry" && roofSelection) {
     score += 22;
     factors.push("System size is derived from the saved roof geometry and panel efficiency.");
+  } else if (sizingSource === "address-context") {
+    score += 14;
+    factors.push("System size uses the current address-only kW input until roof geometry is drawn.");
   } else {
     score += 6;
     factors.push("System size is using a manual fallback instead of saved roof geometry.");
@@ -312,6 +406,10 @@ function buildDemoSolarConfidence({ matchQuality, sizingSource, roofSelection, p
   if (productionModel) {
     score += 8;
     factors.push("Production uses month-by-month solar resource data and explicit system-loss assumptions.");
+    if (productionModel.site_context_available) {
+      score += 5;
+      factors.push("Address-level building, vegetation, and terrain context temper the production model.");
+    }
   }
 
   if (matchQuality === "high") {
@@ -331,6 +429,13 @@ function buildDemoSolarConfidence({ matchQuality, sizingSource, roofSelection, p
   if ((roofSelection?.areaSquareFeet || 0) < 350) {
     score -= 4;
     factors.push("The selected roof area is small, so the estimate is more sensitive to drawing changes.");
+  }
+
+  if (sizingSource === "address-context") {
+    score = Math.min(score, 78);
+    factors.push("Drawing the roof area is the next step to graduate this from address-context to roof-backed sizing.");
+  } else if (sizingSource !== "roof-geometry") {
+    score = Math.min(score, 68);
   }
 
   score = Math.max(20, Math.min(95, score));
@@ -411,9 +516,14 @@ function buildDemoEstimate(formValues) {
 
   const effectiveRoofSelection =
     roofSelection || (guid ? demoPropertyRecords.get(guid)?.roof_selection : null);
+  const effectivePropertyContext = guid ? demoPropertyRecords.get(guid)?.property_context : null;
   const matchQuality =
     (guid ? demoPropertyRecords.get(guid)?.property_preview?.match_quality : null) || "high";
-  const sizingSource = effectiveRoofSelection ? "roof-geometry" : "manual";
+  const sizingSource = effectiveRoofSelection
+    ? "roof-geometry"
+    : effectivePropertyContext
+      ? "address-context"
+      : "manual";
   const systemSizeKw = Number(
     (calculateRoofBackedSystemSize(effectiveRoofSelection, panel_efficiency) ??
       system_size ??
@@ -435,7 +545,7 @@ function buildDemoEstimate(formValues) {
     rateMode === "auto" ? utilityContext.rate_source : "manual input";
 
   if (!systemSizeKw) {
-    throw new Error("Draw a roof area first.");
+    throw new Error("Provide a system size or draw a roof area first.");
   }
 
   const avgAllSkyRadiation = Number(getDemoRadiation(address).toFixed(2));
@@ -449,6 +559,8 @@ function buildDemoEstimate(formValues) {
     panelEfficiency: panel_efficiency,
     electricityRate: electricityRateUsed,
     roofSelection: effectiveRoofSelection,
+    propertyContext: effectivePropertyContext,
+    sizingSource,
   });
   const dailyProduction = productionModel.daily_production;
   const annualProduction = productionModel.annual_production;
@@ -498,6 +610,24 @@ function buildDemoEstimate(formValues) {
     match_quality: matchQuality,
     system_size_kw: systemSizeKw,
     sizing_source: sizingSource,
+    estimate_mode:
+      sizingSource === "roof-geometry"
+        ? "roof-backed"
+        : sizingSource === "address-context"
+          ? "address-context"
+          : "manual-screening",
+    sizing_note:
+      sizingSource === "roof-geometry"
+        ? "System size is derived from the saved roof geometry and panel efficiency."
+        : sizingSource === "address-context"
+          ? `Address-only estimate uses a ${systemSizeKw.toFixed(1)} kW system size input while saved property context refines orientation and site-loss assumptions.`
+          : `Manual screening estimate uses a ${systemSizeKw.toFixed(1)} kW system size input because no roof geometry or saved property context is available yet.`,
+    next_input_needed:
+      sizingSource === "roof-geometry"
+        ? null
+        : sizingSource === "address-context"
+          ? "Draw the usable roof area to replace address-only sizing with roof-backed capacity."
+          : "Locate the property context and draw the usable roof area to improve this estimate.",
     electricity_rate_mode: rateMode,
     electricity_rate_input: Number(Number(electricity_rate).toFixed(4)),
     electricity_rate_used: electricityRateUsed,
@@ -566,6 +696,7 @@ function buildDemoHomeownerQuote(address, report, existingQuote = null) {
   const quoteId = existingQuote?.id || createClientGuid();
   const annualSavings = Math.round(report.annual_savings || 0);
   const annualProduction = Math.round(report.annual_production || 0);
+  const hasRoofGeometry = report.sizing_source === "roof-geometry";
 
   return {
     id: quoteId,
@@ -577,12 +708,13 @@ function buildDemoHomeownerQuote(address, report, existingQuote = null) {
     summary: `${Number(report.system_size_kw || 0).toFixed(1)} kW, ${annualProduction.toLocaleString()} kWh/year, ${annualSavings.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })}/year savings.`,
     confidence_label: report.confidence?.label || "Planning",
     disclaimer:
-      "This is a shareable planning quote based on the saved roof geometry and current model assumptions. Final pricing, layout, and installer scope still require site review.",
+      `${hasRoofGeometry ? "This is a shareable planning quote based on the saved roof geometry" : "This is a shareable planning quote based on address-level context"} and current model assumptions. Final pricing, layout, and installer scope still require site review.`,
   };
 }
 
 function saveDemoSolarReport({
   guid,
+  system_size,
   panel_efficiency,
   electricity_rate,
   electricity_rate_mode,
@@ -600,7 +732,7 @@ function saveDemoSolarReport({
     guid,
     address: record.address,
     roofSelection: roofSelection ?? record.roof_selection,
-    system_size: roofSelection?.recommendedKw ?? record.roof_selection?.recommendedKw ?? null,
+    system_size: roofSelection?.recommendedKw ?? record.roof_selection?.recommendedKw ?? system_size ?? 7,
     panel_efficiency,
     electricity_rate,
     electricity_rate_mode,
@@ -612,6 +744,10 @@ function saveDemoSolarReport({
     created_at: new Date().toISOString(),
     address: estimate.address,
     system_size_kw: estimate.system_size_kw,
+    estimate_mode: estimate.estimate_mode,
+    sizing_source: estimate.sizing_source,
+    sizing_note: estimate.sizing_note,
+    next_input_needed: estimate.next_input_needed,
     annual_production: estimate.annual_production,
     annual_savings: estimate.annual_savings,
     system_cost: estimate.system_cost,
@@ -1638,9 +1774,44 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
     slopePercent >= 14 ? "steep" : slopePercent >= 7 ? "rolling" : slopePercent >= 3 ? "gentle" : "flat";
   const obstructionRisk =
     directionalPressure.south >= 0.9 ? "high" : directionalPressure.south >= 0.42 ? "moderate" : "low";
+  const canopyCount = 1 + (seed % 4);
+  const canopyDirectionalPressure = {
+    north: Number((0.08 + (seed % 2) * 0.05).toFixed(2)),
+    south: Number((0.16 + (seed % 4) * 0.07).toFixed(2)),
+    east: Number((0.1 + (seed % 3) * 0.05).toFixed(2)),
+    west: Number((0.14 + (seed % 5) * 0.06).toFixed(2)),
+  };
+  const nearbyCanopy = Array.from({ length: canopyCount }, (_, index) => {
+    const distance = 12 + index * 9 + (seed % 6);
+    const directionBuckets = ["west", "southwest", "south", "east"];
+    const directionBucket = directionBuckets[index % directionBuckets.length];
+
+    return {
+      id: `demo-canopy-${index + 1}`,
+      name: index === 0 ? "Street tree" : `Canopy ${index + 1}`,
+      kind: index % 2 === 0 ? "tree" : "wooded strip",
+      height_m: Number((8 + index * 2 + (seed % 3)).toFixed(1)),
+      distance_m: Number(distance.toFixed(1)),
+      direction_bucket: directionBucket,
+      direction_group:
+        directionBucket.includes("south")
+          ? "south"
+          : directionBucket.includes("north")
+            ? "north"
+            : directionBucket.includes("east")
+              ? "east"
+              : "west",
+      shadow_pressure: Number(((8 + index * 2) / distance).toFixed(2)),
+      centroid: {
+        lat: Number((roundedLatitude + 0.00005 * (index + 1)).toFixed(6)),
+        lng: Number((roundedLongitude - 0.00006 * (index + 1)).toFixed(6)),
+      },
+    };
+  });
+  const canopyPressureScore = Math.max(...Object.values(canopyDirectionalPressure));
 
   return {
-    context_version: "property-context-v1",
+    context_version: "property-context-v2",
     latitude: roundedLatitude,
     longitude: roundedLongitude,
     match_quality: matchQuality || "high",
@@ -1661,6 +1832,17 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
       obstruction_risk: obstructionRisk,
       summary: `${buildingCount} nearby building footprints found. The strongest structure pressure sits on the south side of the property.`,
     },
+    canopy_context: {
+      source: "demo",
+      search_radius_m: 82,
+      canopy_count: canopyCount,
+      nearby_canopy: nearbyCanopy,
+      nearest_canopy: nearbyCanopy[0],
+      directional_pressure: canopyDirectionalPressure,
+      obstruction_risk:
+        canopyPressureScore >= 0.55 ? "high" : canopyPressureScore >= 0.3 ? "moderate" : "low",
+      summary: `${canopyCount} nearby tree or canopy features found in demo mode.`,
+    },
     terrain_context: {
       source: "demo",
       center_elevation_m: 158 + (seed % 12),
@@ -1674,17 +1856,19 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
     },
     shade_context: {
       obstruction_risk: obstructionRisk,
+      building_pressure_score: Math.max(...Object.values(directionalPressure)),
+      canopy_pressure_score: canopyPressureScore,
       terrain_bias:
         dominantAspect === "north-facing"
           ? "less solar-favored"
           : dominantAspect === "south-facing"
             ? "more solar-favored"
             : "mostly neutral",
-      summary: `Structure-driven shade risk reads as ${obstructionRisk}.`,
+      summary: `Building, vegetation, and terrain cues read as ${obstructionRisk} obstruction risk.`,
     },
-    summary: `${buildingCount} nearby building footprints found. Local terrain reads as ${terrainClass} with a ${dominantAspect} bias. Structure-driven shade risk reads as ${obstructionRisk}.`,
+    summary: `${buildingCount} nearby building footprints and ${canopyCount} canopy features found. Local terrain reads as ${terrainClass} with a ${dominantAspect} bias.`,
     model_note:
-      "This first context layer uses nearby buildings and terrain cues only. Trees, fences, and parcel-certified boundaries are not modeled yet.",
+      "This context layer uses nearby buildings, mapped vegetation, and terrain cues. Fences and parcel-certified boundaries are not modeled yet.",
   };
 }
 
@@ -1866,6 +2050,7 @@ export async function fetchSolarEstimate(formValues) {
 export async function saveSolarReport({
   guid,
   reportName,
+  system_size,
   panel_efficiency,
   electricity_rate,
   electricity_rate_mode,
@@ -1876,6 +2061,7 @@ export async function saveSolarReport({
     return saveDemoSolarReport({
       guid,
       reportName,
+      system_size,
       panel_efficiency,
       electricity_rate,
       electricity_rate_mode,
@@ -1887,6 +2073,7 @@ export async function saveSolarReport({
   return request("/api/solar-report", {
     guid,
     report_name: reportName,
+    system_size,
     panel_efficiency,
     electricity_rate,
     electricity_rate_mode,

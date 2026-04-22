@@ -78,7 +78,7 @@ const initialForm = {
 const modeContentByMode = {
   solar: {
     resultPanelCopy:
-      "Estimate output uses the saved roof selection, roof-facing assumptions from the drawn plane, first-pass site context, and the current system inputs.",
+      "Estimate output uses address-level site context for a quick pass, then switches to roof-backed sizing when a roof polygon is saved.",
   },
   garden: {
     resultPanelCopy:
@@ -88,11 +88,11 @@ const modeContentByMode = {
 
 const landingContentByPage = {
   solar: {
-    title: "Locate the property and run the roof estimate.",
-    summary: "Address first. Draw the usable roof plane, then calculate.",
-    steps: ["Address", "Map", "Roof", "Estimate"],
+    title: "Locate the property and run the solar estimate.",
+    summary: "Address first. Run a contextual quick estimate, then draw the roof to refine.",
+    steps: ["Address", "Context", "Quick estimate", "Roof refine"],
     intakeTitle: "Run solar estimate",
-    intakeCopy: "Find the property, draw the roof, and calculate.",
+    intakeCopy: "Find the property, run the address-context estimate, and draw the roof when ready.",
     pageLabel: "Solar Buddy",
   },
   "space-weather": {
@@ -305,6 +305,38 @@ function StatCard({ label, value, detail }) {
       {detail ? <p className="stat-detail">{detail}</p> : null}
     </article>
   );
+}
+
+function getSolarSizingLabel(sizingSource) {
+  if (sizingSource === "roof-geometry") {
+    return "Roof-backed sizing";
+  }
+
+  if (sizingSource === "address-context") {
+    return "Address-context sizing";
+  }
+
+  return "Manual sizing";
+}
+
+function getSolarSizingDetail(result) {
+  if (!result) {
+    return "";
+  }
+
+  if (result.sizing_note) {
+    return result.sizing_note;
+  }
+
+  if (result.sizing_source === "roof-geometry") {
+    return "Derived from the saved roof selection.";
+  }
+
+  if (result.sizing_source === "address-context") {
+    return "Uses the current quick-estimate system size until a roof area is drawn.";
+  }
+
+  return "Using manual sizing fallback.";
 }
 
 function AddressFields({ address, onChange }) {
@@ -1676,7 +1708,7 @@ function SavedSolarReportList({
     return (
       <p className="saved-report-empty">
         No saved report yet. Save the current estimate to keep a property-tied snapshot of this
-        roof, economics, and model state.
+        sizing, economics, and model state.
       </p>
     );
   }
@@ -2061,7 +2093,10 @@ export default function App() {
   );
   const propertyLocated = Boolean(propertyPreview);
   const solarReadyForEstimate =
-    propertyLocated && Boolean(roofSelection) && Boolean(propertyRecordGuid) && !propertyRecordSaving;
+    propertyLocated &&
+    Boolean(propertyRecordGuid) &&
+    !propertyRecordSaving &&
+    !(propertyContextLoading && !propertyContext);
 
   const highLevelSummary = result
     ? `This address shows ${
@@ -2076,7 +2111,7 @@ export default function App() {
       )} kWh of yearly production using a ${formatNumber(
         result.system_size_kw || roofSelection?.recommendedKw || form.system_size,
         1,
-      )} kW roof-backed system size.`
+      )} kW ${result.sizing_source === "roof-geometry" ? "roof-backed" : "address-context"} system size.`
     : null;
 
   const analyzedGardenZones = useMemo(
@@ -3045,11 +3080,6 @@ export default function App() {
       return;
     }
 
-    if (!roofSelection) {
-      setEstimateError("Draw a roof area on the map first.");
-      return;
-    }
-
     if (propertyContextLoading && !propertyContext) {
       setEstimateError("Solar site context is still loading. Try again in a moment.");
       return;
@@ -3115,6 +3145,7 @@ export default function App() {
     try {
       const response = await saveSolarReport({
         guid: propertyRecordGuid,
+        system_size: form.system_size,
         panel_efficiency: form.panel_efficiency,
         electricity_rate: form.electricity_rate,
         electricity_rate_mode: form.electricity_rate_mode,
@@ -3246,11 +3277,13 @@ export default function App() {
                     ? "Calculating..."
                     : !propertyLocated
                       ? "Locate property first"
-                      : !roofSelection
-                        ? "Draw roof first"
-                        : propertyRecordSaving
-                          ? "Saving roof..."
-                          : "Calculate solar estimate"}
+                      : propertyContextLoading && !propertyContext
+                        ? "Loading context..."
+                      : propertyRecordSaving
+                        ? "Saving property..."
+                        : roofSelection
+                          ? "Calculate solar estimate"
+                          : "Run address estimate"}
                 </button>
               ) : null}
             </div>
@@ -3259,15 +3292,29 @@ export default function App() {
               <>
                 <div className="field-row">
                   <label>
-                    Roof-backed system size
+                    {roofSelection ? "Roof-backed system size" : "Address-only system size (kW)"}
                     <input
-                      readOnly
+                      type={roofSelection ? "text" : "number"}
+                      min={roofSelection ? undefined : "0.1"}
+                      step={roofSelection ? undefined : "0.1"}
+                      readOnly={Boolean(roofSelection)}
+                      required
                       value={
                         roofSelection
                           ? `${formatNumber(roofSelection.recommendedKw, 1)} kW from drawn roof`
-                          : "Draw a roof area on the map"
+                          : form.system_size
                       }
+                      onChange={(event) => {
+                        if (!roofSelection) {
+                          updateNumber("system_size", event.target.value);
+                        }
+                      }}
                     />
+                    <span className="field-hint">
+                      {roofSelection
+                        ? "Drawn roof geometry controls the system size."
+                        : "Used for the quick estimate until the usable roof area is drawn."}
+                    </span>
                   </label>
 
                   <label>
@@ -3375,7 +3422,7 @@ export default function App() {
               {isSolarPage && propertyRecordGuid ? (
                 <p>
                   Property record {propertyRecordSaving ? "is saving" : "is active"} for the
-                  current roof-backed estimate flow with {savedSolarReports.length} saved
+                  current solar estimate flow with {savedSolarReports.length} saved
                   {savedSolarReports.length === 1 ? " report" : " reports"}.
                 </p>
               ) : null}
@@ -3539,14 +3586,10 @@ export default function App() {
                     <StatCard
                       label="System size"
                       value={`${formatNumber(result.system_size_kw, 1)} kW`}
-                      detail={
-                        result.sizing_source === "roof-geometry"
-                          ? "Derived from the saved roof selection."
-                          : "Using manual sizing fallback."
-                      }
+                      detail={getSolarSizingDetail(result)}
                     />
                     <StatCard
-                      label="Modeled roof plane"
+                      label="Modeled array plane"
                       value={
                         result.production_model?.assumed_tilt != null &&
                         result.production_model?.assumed_azimuth != null
@@ -3556,7 +3599,7 @@ export default function App() {
                       detail={
                         result.production_model?.assumed_azimuth != null
                           ? `${formatAzimuthLabel(result.production_model.assumed_azimuth)} azimuth`
-                          : "Roof-facing assumptions unavailable."
+                          : "Array-facing assumptions unavailable."
                       }
                     />
                     <StatCard
@@ -3579,14 +3622,14 @@ export default function App() {
                           ? `${formatNumber(result.roof_area_square_feet, 0)} sq ft`
                           : roofSelection
                             ? `${formatNumber(roofSelection.areaSquareFeet, 0)} sq ft`
-                            : "Not drawn"
+                            : "Address-only"
                       }
                       detail={
                         result.roof_area_square_feet
                           ? `${formatNumber(result.system_size_kw, 1)} kW used in estimate`
                           : roofSelection
                             ? `${formatNumber(roofSelection.recommendedKw, 1)} kW suggested`
-                          : "Draw a roof polygon on the live map."
+                            : result.next_input_needed || "Draw a roof polygon on the live map."
                       }
                     />
                     <StatCard
@@ -3650,23 +3693,22 @@ export default function App() {
                           <p>
                             About {formatNumber((result.production_model?.performance_ratio || 0) * 100, 0)}%
                             after modeled inverter, electrical, soiling, availability, temperature,
-                            and layout losses.
+                            layout, and site-context losses.
                           </p>
                         </div>
                         <div className="status-row">
-                          <strong>Roof-backed sizing</strong>
+                          <strong>{getSolarSizingLabel(result.sizing_source)}</strong>
                           <p>
-                            The current estimate uses {formatNumber(result.system_size_kw, 1)} kW
-                            from the saved roof and about{" "}
+                            {getSolarSizingDetail(result)} Panel efficiency is{" "}
                             {formatNumber(
                               (result.production_model?.effective_panel_efficiency || form.panel_efficiency) * 100,
                               0,
                             )}
-                            % panel efficiency.
+                            %.
                           </p>
                         </div>
                         <div className="status-row">
-                          <strong>Roof-facing inputs</strong>
+                          <strong>Array-facing inputs</strong>
                           <p>
                             The model is using{" "}
                             {result.production_model?.assumed_tilt != null
@@ -3679,6 +3721,12 @@ export default function App() {
                             from {result.production_model?.azimuth_source || "fallback logic"}.
                           </p>
                         </div>
+                        {result.next_input_needed ? (
+                          <div className="status-row">
+                            <strong>Next refinement</strong>
+                            <p>{result.next_input_needed}</p>
+                          </div>
+                        ) : null}
                         <div className="status-row">
                           <strong>Site context</strong>
                           <p>
@@ -3787,7 +3835,7 @@ export default function App() {
                         </button>
                       </div>
                       <p>
-                        Save the current roof-backed estimate as a property-tied planning report,
+                        Save the current estimate as a property-tied planning report,
                         then promote any saved report into a shareable homeowner quote.
                       </p>
                       <SavedSolarReportList
