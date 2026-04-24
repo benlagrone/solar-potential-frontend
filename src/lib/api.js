@@ -1296,8 +1296,89 @@ function buildDemoSpaceWeather(coordinates) {
   };
 }
 
-function buildDemoSpaceWeatherHistory(coordinates, { days = 7 } = {}) {
+function normalizeDemoHistoryEventTypes(eventTypes) {
+  if (!Array.isArray(eventTypes) || !eventTypes.length) {
+    return ["flare", "geomagnetic_storm"];
+  }
+
+  const aliases = {
+    flare: "flare",
+    solar_flare: "flare",
+    geomagnetic_storm: "geomagnetic_storm",
+    "geomagnetic-storm": "geomagnetic_storm",
+    storm: "geomagnetic_storm",
+  };
+
+  return Array.from(
+    new Set(
+      eventTypes
+        .map((value) => aliases[String(value || "").trim().toLowerCase()] || null)
+        .filter(Boolean),
+    ),
+  );
+}
+
+function normalizeDemoHistorySeverity(value) {
+  const normalized = String(value || "low").trim().toLowerCase();
+  if (normalized === "medium") {
+    return "moderate";
+  }
+
+  return ["low", "moderate", "high", "extreme"].includes(normalized) ? normalized : "low";
+}
+
+function getDemoHistorySeverityRank(value) {
+  return {
+    low: 0,
+    moderate: 1,
+    high: 2,
+    extreme: 3,
+  }[String(value || "low").trim().toLowerCase()] ?? 0;
+}
+
+function getDemoFlareSeverity(classType) {
+  const normalized = String(classType || "").trim().toUpperCase();
+  const magnitude = Number(normalized.slice(1) || 0);
+
+  if (normalized.startsWith("X")) {
+    return magnitude >= 10 ? "extreme" : "high";
+  }
+
+  if (normalized.startsWith("M")) {
+    return magnitude >= 5 ? "high" : "moderate";
+  }
+
+  if (normalized.startsWith("C")) {
+    return magnitude >= 5 ? "moderate" : "low";
+  }
+
+  return "low";
+}
+
+function getDemoStormSeverity(kpValue) {
+  if (kpValue >= 8) {
+    return "extreme";
+  }
+
+  if (kpValue >= 6) {
+    return "high";
+  }
+
+  if (kpValue >= 5) {
+    return "moderate";
+  }
+
+  return "low";
+}
+
+function buildDemoSpaceWeatherHistory(
+  coordinates,
+  { days = 7, eventTypes, minSeverity = "low", limit = 100 } = {},
+) {
   const normalizedDays = Math.max(1, Math.min(Number(days) || 7, 90));
+  const normalizedEventTypes = normalizeDemoHistoryEventTypes(eventTypes);
+  const normalizedMinSeverity = normalizeDemoHistorySeverity(minSeverity);
+  const normalizedLimit = Math.max(1, Math.min(Number(limit) || 100, 200));
   const now = new Date();
   const startDate = new Date(now.getTime() - (normalizedDays - 1) * 24 * 60 * 60 * 1000);
   const fetchedAt = now.toISOString();
@@ -1318,22 +1399,46 @@ function buildDemoSpaceWeatherHistory(coordinates, { days = 7 } = {}) {
   for (let index = 0; index < normalizedDays; index += 6) {
     const eventDate = new Date(now.getTime() - index * 24 * 60 * 60 * 1000);
     const isMajor = (seed + index) % 3 === 0;
-    const flareClass = isMajor ? `M${1 + ((seed + index) % 5)}.${(seed + index) % 9}` : `C${3 + ((seed + index) % 5)}.${(seed + index) % 9}`;
+    const flareClass = isMajor
+      ? `M${1 + ((seed + index) % 5)}.${(seed + index) % 9}`
+      : `C${3 + ((seed + index) % 5)}.${(seed + index) % 9}`;
+    const severity = getDemoFlareSeverity(flareClass);
     const localHour = 11 + ((seed + index) % 5);
     eventDate.setHours(localHour, 0, 0, 0);
+    const localRelevance = flareClass.startsWith("M") ? "watch" : "low";
     events.push({
       id: `demo-flare-${index}`,
+      event_type: "flare",
+      severity,
+      title: `${flareClass} flare`,
+      source: "demo",
+      source_id: `demo-flare-${index}`,
+      local_relevance: localRelevance,
+      relevance_reason: flareClass.startsWith("M")
+        ? "This flare peaked during local daylight, so it has moderate local radio relevance in demo mode."
+        : "This flare remained in the lower C-class range, so local daylight-side effects stay limited in demo mode.",
+      location_context: {
+        local_event_time: eventDate.toISOString(),
+        is_daylight: true,
+        latitude_band: latitudeBand,
+        primary_effect: "hf_radio",
+      },
+      metadata: {
+        class_type: flareClass,
+        source_location: "Demo active region",
+      },
       kind: "flare",
       label: flareClass,
-      tone: flareClass.startsWith("M") ? "watch" : "low",
+      tone: severity,
       observed_at: eventDate.toISOString(),
       local_time: eventDate.toISOString(),
       detail: `${flareClass} flare from a demo active region.`,
       global_severity: {
         class: flareClass,
+        severity,
       },
-      local_relevance: {
-        tone: flareClass.startsWith("M") ? "watch" : "low",
+      local_relevance_legacy: {
+        tone: localRelevance,
         label: "Daylight-side flare relevance",
         detail: flareClass.startsWith("M")
           ? "This flare peaked during local daylight, so it has moderate local radio relevance in demo mode."
@@ -1345,26 +1450,53 @@ function buildDemoSpaceWeatherHistory(coordinates, { days = 7 } = {}) {
   for (let index = 3; index < normalizedDays; index += 11) {
     const eventDate = new Date(now.getTime() - index * 24 * 60 * 60 * 1000);
     const kpValue = Number((4.7 + ((seed + index) % 4) * 0.8).toFixed(1));
+    const severity = getDemoStormSeverity(kpValue);
     eventDate.setHours(2 + ((seed + index) % 4), 0, 0, 0);
+    const localRelevance =
+      latitudeBand === "mid" && kpValue >= 5
+        ? "watch"
+        : latitudeBand === "low" && kpValue >= 7
+          ? "watch"
+          : kpValue >= 7 && latitudeBand === "high"
+            ? "alert"
+            : "low";
     events.push({
       id: `demo-storm-${index}`,
+      event_type: "geomagnetic_storm",
+      severity,
+      title: `Kp ${kpValue.toFixed(1)} geomagnetic storm`,
+      source: "demo",
+      source_id: `demo-storm-${index}`,
+      local_relevance: localRelevance,
+      relevance_reason:
+        latitudeBand === "mid" && kpValue >= 5
+          ? "This latitude band starts to matter under stronger demo geomagnetic conditions."
+          : latitudeBand === "high" && kpValue >= 7
+            ? "This higher-latitude demo property would feel stronger aurora and GNSS relevance during this storm."
+            : "This storm stays mostly poleward of the property in demo mode.",
+      location_context: {
+        local_event_time: eventDate.toISOString(),
+        is_daylight: false,
+        latitude_band: latitudeBand,
+        primary_effect: kpValue >= 5 ? "aurora_gnss" : "geomagnetic_background",
+        aurora_potential: kpValue >= 5 && latitudeBand !== "equatorial" ? "possible" : "low",
+      },
+      metadata: {
+        max_kp_index: kpValue,
+      },
       kind: "geomagnetic-storm",
       label: `Kp ${kpValue.toFixed(1)}`,
-      tone: kpValue >= 7 ? "alert" : kpValue >= 5 ? "watch" : "low",
+      tone: severity,
       observed_at: eventDate.toISOString(),
       local_time: eventDate.toISOString(),
       detail: `Geomagnetic storm interval with a demo peak near Kp ${kpValue.toFixed(1)}.`,
       global_severity: {
         max_kp_index: kpValue,
         start_time: eventDate.toISOString(),
+        severity,
       },
-      local_relevance: {
-        tone:
-          latitudeBand === "mid" && kpValue >= 5
-            ? "watch"
-            : latitudeBand === "low" && kpValue >= 7
-              ? "watch"
-              : "low",
+      local_relevance_legacy: {
+        tone: localRelevance,
         label: `${latitudeBand[0].toUpperCase()}${latitudeBand.slice(1)} latitude-band relevance`,
         detail:
           latitudeBand === "mid" && kpValue >= 5
@@ -1374,10 +1506,17 @@ function buildDemoSpaceWeatherHistory(coordinates, { days = 7 } = {}) {
     });
   }
 
-  events.sort((left, right) => new Date(right.observed_at) - new Date(left.observed_at));
+  const filteredEvents = events
+    .filter(
+      (event) =>
+        normalizedEventTypes.includes(event.event_type) &&
+        getDemoHistorySeverityRank(event.severity) >= getDemoHistorySeverityRank(normalizedMinSeverity),
+    )
+    .sort((left, right) => new Date(right.observed_at) - new Date(left.observed_at))
+    .slice(0, normalizedLimit);
 
-  const flareEvents = events.filter((event) => event.kind === "flare");
-  const stormEvents = events.filter((event) => event.kind === "geomagnetic-storm");
+  const flareEvents = filteredEvents.filter((event) => event.event_type === "flare");
+  const stormEvents = filteredEvents.filter((event) => event.event_type === "geomagnetic_storm");
   const strongestFlare = flareEvents.reduce((best, event) => {
     const bestClass = String(best?.global_severity?.class || "A0");
     const eventClass = String(event.global_severity?.class || "A0");
@@ -1393,26 +1532,52 @@ function buildDemoSpaceWeatherHistory(coordinates, { days = 7 } = {}) {
         : best,
     null,
   );
+  const localWatchCount = filteredEvents.filter((event) => event.local_relevance === "watch").length;
+  const localAlertCount = filteredEvents.filter((event) => event.local_relevance === "alert").length;
+  const summaryText =
+    filteredEvents.length > 0
+      ? `The last ${normalizedDays} days included ${flareEvents.length} flare events and ${stormEvents.length} geomagnetic storms for this ${latitudeBand} latitude band in demo mode.`
+      : `No demo flare or geomagnetic storm events match the selected history filters for the last ${normalizedDays} days.`;
 
   return {
     latitude: Number(coordinates.latitude.toFixed(6)),
     longitude: Number(coordinates.longitude.toFixed(6)),
     time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    window: {
+      start_date: startDate.toISOString().slice(0, 10),
+      end_date: now.toISOString().slice(0, 10),
+    },
     start_date: startDate.toISOString().slice(0, 10),
     end_date: now.toISOString().slice(0, 10),
     days: normalizedDays,
     latitude_band: latitudeBand,
-    summary: `The last ${normalizedDays} days included ${flareEvents.length} flare events and ${stormEvents.length} geomagnetic storms in demo mode.`,
+    applied_filters: {
+      event_types: normalizedEventTypes,
+      min_severity: normalizedMinSeverity,
+      limit: normalizedLimit,
+    },
+    summary: {
+      event_count: filteredEvents.length,
+      flare_count: flareEvents.length,
+      geomagnetic_storm_count: stormEvents.length,
+      local_watch_count: localWatchCount,
+      local_alert_count: localAlertCount,
+      strongest_flare_class: strongestFlare?.global_severity?.class || null,
+      strongest_geomagnetic_kp: strongestStorm?.global_severity?.max_kp_index || null,
+    },
+    summary_text: summaryText,
     counts: {
       flare_events: flareEvents.length,
       geomagnetic_storms: stormEvents.length,
-      total_events: events.length,
+      total_events: filteredEvents.length,
+      local_watch_events: localWatchCount,
+      local_alert_events: localAlertCount,
     },
     strongest: {
       flare_class: strongestFlare?.global_severity?.class || null,
       geomagnetic_kp: strongestStorm?.global_severity?.max_kp_index || null,
     },
-    events,
+    events: filteredEvents,
     freshness: {
       status: "fresh",
       checked_at: fetchedAt,
@@ -2094,12 +2259,18 @@ export async function fetchSpaceWeatherHistory(coordinates, options = {}) {
   if (demoMode) {
     return buildDemoSpaceWeatherHistory(coordinates, {
       days: options.days,
+      eventTypes: options.eventTypes,
+      minSeverity: options.minSeverity,
+      limit: options.limit,
     });
   }
 
   return request("/api/space-weather/history", {
     ...coordinates,
     days: options.days ?? 7,
+    event_types: options.eventTypes ?? undefined,
+    min_severity: options.minSeverity ?? "low",
+    limit: options.limit ?? 100,
     force_refresh: Boolean(options.forceRefresh),
   });
 }

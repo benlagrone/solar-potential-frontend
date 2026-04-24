@@ -60,6 +60,19 @@ const sourceLabels = {
   "open-meteo-historical-weather": "Open-Meteo historical weather",
 };
 
+const historyEventTypeOptions = [
+  { value: "all", label: "All events" },
+  { value: "flare", label: "Flares only" },
+  { value: "geomagnetic_storm", label: "Geomagnetic storms" },
+];
+
+const historySeverityOptions = [
+  { value: "low", label: "All severities" },
+  { value: "moderate", label: "Moderate+" },
+  { value: "high", label: "High+" },
+  { value: "extreme", label: "Extreme only" },
+];
+
 const initialForm = {
   address: {
     street: "",
@@ -198,6 +211,46 @@ function formatSourceLabel(value) {
   }
 
   return sourceLabels[sourceId] || formatLabel(sourceId);
+}
+
+function formatHistoryEventTypeLabel(value) {
+  if (value === "flare") {
+    return "Solar flare";
+  }
+
+  if (value === "geomagnetic_storm") {
+    return "Geomagnetic storm";
+  }
+
+  return formatLabel(value);
+}
+
+function getHistoryEventTypeValues(eventType) {
+  return eventType === "all" ? ["flare", "geomagnetic_storm"] : [eventType];
+}
+
+function historyFiltersMatch(snapshot, coordinates, { days, eventType, minSeverity }) {
+  if (!coordinatesMatch(snapshot, coordinates)) {
+    return false;
+  }
+
+  if (Number(snapshot?.days || 0) !== Number(days)) {
+    return false;
+  }
+
+  const expectedEventTypes = getHistoryEventTypeValues(eventType);
+  const actualEventTypes = Array.isArray(snapshot?.applied_filters?.event_types)
+    ? snapshot.applied_filters.event_types
+    : [];
+
+  if (
+    actualEventTypes.length !== expectedEventTypes.length ||
+    expectedEventTypes.some((value) => !actualEventTypes.includes(value))
+  ) {
+    return false;
+  }
+
+  return String(snapshot?.applied_filters?.min_severity || "low") === String(minSeverity || "low");
 }
 
 function getCompassDirection(azimuth) {
@@ -501,7 +554,7 @@ function ConfidenceBadge({ confidence }) {
 function getBadgeTone(value) {
   const normalized = String(value || "").toLowerCase();
 
-  if (["alert", "warning", "high"].includes(normalized)) {
+  if (["alert", "warning", "high", "extreme"].includes(normalized)) {
     return "alert";
   }
 
@@ -817,11 +870,27 @@ function SpaceWeatherHistoryPanel({
   loading,
   error,
   days,
+  eventType,
+  minSeverity,
   onDaysChange,
+  onEventTypeChange,
+  onMinSeverityChange,
   onRefresh,
 }) {
   const visibleEvents = (data?.events || []).slice(0, 18);
   const hiddenCount = Math.max((data?.events?.length || 0) - visibleEvents.length, 0);
+  const summaryCopy = data?.summary_text || (typeof data?.summary === "string" ? data.summary : "");
+  const eventCount = data?.summary?.event_count ?? data?.counts?.total_events ?? data?.events?.length ?? 0;
+  const flareCount = data?.summary?.flare_count ?? data?.counts?.flare_events ?? 0;
+  const stormCount = data?.summary?.geomagnetic_storm_count ?? data?.counts?.geomagnetic_storms ?? 0;
+  const localWatchCount = data?.summary?.local_watch_count ?? data?.counts?.local_watch_events ?? 0;
+  const localAlertCount = data?.summary?.local_alert_count ?? data?.counts?.local_alert_events ?? 0;
+  const strongestFlare = data?.summary?.strongest_flare_class || data?.strongest?.flare_class || "None";
+  const strongestStormKp =
+    data?.summary?.strongest_geomagnetic_kp ?? data?.strongest?.geomagnetic_kp ?? null;
+  const windowStart = data?.window?.start_date || data?.start_date || "Unknown";
+  const windowEnd = data?.window?.end_date || data?.end_date || "Unknown";
+  const isFiltered = eventType !== "all" || minSeverity !== "low";
 
   return (
     <section className="panel">
@@ -831,22 +900,56 @@ function SpaceWeatherHistoryPanel({
           <h2>NASA DONKI event timeline</h2>
         </div>
         <p className="panel-copy">
-          This complements the live alert view with recent flare and geomagnetic activity around the
-          property’s latitude band.
+          Search recent flare and geomagnetic events, then see what those global events likely meant
+          at this property.
         </p>
       </div>
 
-      <div className="history-range-switch" role="tablist" aria-label="History range">
-        {[7, 30, 90].map((candidateDays) => (
-          <button
-            key={candidateDays}
-            className={`history-range-button ${days === candidateDays ? "history-range-button-active" : ""}`}
-            type="button"
-            onClick={() => onDaysChange(candidateDays)}
-          >
-            Last {candidateDays} days
-          </button>
-        ))}
+      <div className="history-control-stack">
+        <div className="history-range-switch" role="tablist" aria-label="History range">
+          {[7, 30, 90].map((candidateDays) => (
+            <button
+              key={candidateDays}
+              className={`history-range-button ${days === candidateDays ? "history-range-button-active" : ""}`}
+              type="button"
+              onClick={() => onDaysChange(candidateDays)}
+            >
+              Last {candidateDays} days
+            </button>
+          ))}
+        </div>
+
+        <div className="history-filter-row">
+          <label className="history-filter-field">
+            <span className="history-filter-label">Event type</span>
+            <select
+              className="history-filter-select"
+              value={eventType}
+              onChange={(event) => onEventTypeChange(event.target.value)}
+            >
+              {historyEventTypeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="history-filter-field">
+            <span className="history-filter-label">Minimum severity</span>
+            <select
+              className="history-filter-select"
+              value={minSeverity}
+              onChange={(event) => onMinSeverityChange(event.target.value)}
+            >
+              {historySeverityOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       {loading && !data ? (
@@ -863,7 +966,7 @@ function SpaceWeatherHistoryPanel({
         </div>
       ) : data ? (
         <>
-          <p className="summary-copy">{data.summary}</p>
+          <p className="summary-copy">{summaryCopy}</p>
           <LiveDataToolbar
             freshness={data.freshness}
             sources={data.sources}
@@ -876,25 +979,26 @@ function SpaceWeatherHistoryPanel({
             <StatCard
               label="Window"
               value={`${data.days || days} days`}
-              detail={`${data.start_date || "Unknown"} to ${data.end_date || "Unknown"}`}
+              detail={`${windowStart} to ${windowEnd}`}
             />
             <StatCard
-              label="Event count"
-              value={String(data.counts?.total_events || 0)}
-              detail={`${data.counts?.flare_events || 0} flares · ${data.counts?.geomagnetic_storms || 0} storms`}
+              label="Matched events"
+              value={String(eventCount)}
+              detail={`${flareCount} flares · ${stormCount} storms`}
+            />
+            <StatCard
+              label="Local watch or alert"
+              value={`${localWatchCount} / ${localAlertCount}`}
+              detail="Watch events first, then alerts for this property."
             />
             <StatCard
               label="Strongest flare"
-              value={data.strongest?.flare_class || "None"}
+              value={strongestFlare}
               detail={`Latitude band ${formatLabel(data.latitude_band)}`}
             />
             <StatCard
               label="Strongest storm"
-              value={
-                data.strongest?.geomagnetic_kp != null
-                  ? `Kp ${formatNumber(data.strongest.geomagnetic_kp, 1)}`
-                  : "None"
-              }
+              value={strongestStormKp != null ? `Kp ${formatNumber(strongestStormKp, 1)}` : "None"}
               detail="Based on DONKI storm intervals in the selected window."
             />
           </div>
@@ -904,32 +1008,63 @@ function SpaceWeatherHistoryPanel({
               {visibleEvents.map((event) => (
                 <article className="history-event-card" key={event.id}>
                   <div className="history-event-meta">
-                    <span className="status-label">
-                      {event.kind === "flare" ? "Solar flare" : "Geomagnetic storm"}
+                    <span className="status-label">{formatHistoryEventTypeLabel(event.event_type || event.kind)}</span>
+                    <strong>{event.title || event.label || formatHistoryEventTypeLabel(event.event_type || event.kind)}</strong>
+                    <span>
+                      {formatDateTime(
+                        event.location_context?.local_event_time || event.local_time || event.observed_at,
+                      )}
                     </span>
-                    <strong>{event.label}</strong>
-                    <span>{formatDateTime(event.local_time || event.observed_at)}</span>
                   </div>
                   <div className="history-event-copy">
-                    <div className="condition-badge-row">
-                      <LevelBadge label={`Global ${formatLabel(event.tone)}`} tone={event.tone} />
+                    <div className="condition-badge-row history-event-badges">
                       <LevelBadge
-                        label={event.local_relevance?.label || "Local relevance"}
-                        tone={event.local_relevance?.tone || "neutral"}
+                        label={formatHistoryEventTypeLabel(event.event_type || event.kind)}
+                        tone="neutral"
                       />
+                      <LevelBadge
+                        label={`Severity ${formatLabel(event.severity || event.tone)}`}
+                        tone={event.severity || event.tone}
+                      />
+                      <LevelBadge
+                        label={`Local ${formatLabel(event.local_relevance || event.local_relevance_legacy?.tone)}`}
+                        tone={event.local_relevance || event.local_relevance_legacy?.tone || "neutral"}
+                      />
+                      <LevelBadge label={formatSourceLabel(event.source)} tone="neutral" />
                     </div>
-                    <p>{event.detail}</p>
-                    {event.local_relevance?.detail ? (
-                      <p className="history-subnote">{event.local_relevance.detail}</p>
-                    ) : null}
+                    <p>{event.relevance_reason || event.local_relevance_legacy?.detail || event.detail}</p>
+                    <div className="history-event-support">
+                      {event.location_context?.is_daylight != null ? (
+                        <span>{event.location_context.is_daylight ? "Daylight side" : "Night side"}</span>
+                      ) : null}
+                      {event.location_context?.latitude_band ? (
+                        <span>{formatLabel(event.location_context.latitude_band)} latitude band</span>
+                      ) : null}
+                      {event.location_context?.aurora_potential ? (
+                        <span>Aurora {formatLabel(event.location_context.aurora_potential)}</span>
+                      ) : null}
+                      {event.metadata?.source_location ? (
+                        <span>{event.metadata.source_location}</span>
+                      ) : null}
+                      {event.global_severity?.max_kp_index != null ? (
+                        <span>Kp {formatNumber(event.global_severity.max_kp_index, 1)}</span>
+                      ) : null}
+                      {event.location_context?.primary_effect ? (
+                        <span>{formatLabel(event.location_context.primary_effect)}</span>
+                      ) : null}
+                    </div>
                   </div>
                 </article>
               ))}
             </div>
           ) : (
             <div className="empty-state">
-              <h3>No recent events</h3>
-              <p>No flare or geomagnetic storm events were returned for this history window.</p>
+              <h3>No matching events</h3>
+              <p>
+                {isFiltered
+                  ? "No flare or geomagnetic storm events matched the selected type and severity filters for this window."
+                  : "No flare or geomagnetic storm events were returned for this history window."}
+              </p>
             </div>
           )}
 
@@ -2170,6 +2305,8 @@ export default function App() {
   const [spaceWeatherHistoryLoading, setSpaceWeatherHistoryLoading] = useState(false);
   const [spaceWeatherHistoryError, setSpaceWeatherHistoryError] = useState("");
   const [spaceWeatherHistoryDays, setSpaceWeatherHistoryDays] = useState(7);
+  const [spaceWeatherHistoryEventType, setSpaceWeatherHistoryEventType] = useState("all");
+  const [spaceWeatherHistoryMinSeverity, setSpaceWeatherHistoryMinSeverity] = useState("low");
   const [surfaceIrradiance, setSurfaceIrradiance] = useState(null);
   const [surfaceIrradianceLoading, setSurfaceIrradianceLoading] = useState(false);
   const [surfaceIrradianceError, setSurfaceIrradianceError] = useState("");
@@ -2358,6 +2495,8 @@ export default function App() {
   const loadSpaceWeatherHistory = async ({
     forceRefresh = false,
     days = spaceWeatherHistoryDays,
+    eventType = spaceWeatherHistoryEventType,
+    minSeverity = spaceWeatherHistoryMinSeverity,
   } = {}) => {
     if (!propertyPreview?.latitude || !propertyPreview?.longitude) {
       return;
@@ -2368,9 +2507,11 @@ export default function App() {
       longitude: propertyPreview.longitude,
     };
     const requestId = spaceWeatherHistoryRequestIdRef.current + 1;
-    const isSameRequest =
-      coordinatesMatch(spaceWeatherHistoryRef.current, coordinates) &&
-      Number(spaceWeatherHistoryRef.current?.days || 0) === Number(days);
+    const isSameRequest = historyFiltersMatch(spaceWeatherHistoryRef.current, coordinates, {
+      days,
+      eventType,
+      minSeverity,
+    });
 
     spaceWeatherHistoryRequestIdRef.current = requestId;
     if (!isSameRequest) {
@@ -2382,6 +2523,8 @@ export default function App() {
     try {
       const nextSpaceWeatherHistory = await fetchSpaceWeatherHistory(coordinates, {
         days,
+        eventTypes: getHistoryEventTypeValues(eventType),
+        minSeverity,
         forceRefresh,
       });
 
@@ -2502,7 +2645,14 @@ export default function App() {
 
     loadSpaceWeather();
     loadSpaceWeatherHistory();
-  }, [isSpaceWeatherPage, propertyPreview?.latitude, propertyPreview?.longitude, spaceWeatherHistoryDays]);
+  }, [
+    isSpaceWeatherPage,
+    propertyPreview?.latitude,
+    propertyPreview?.longitude,
+    spaceWeatherHistoryDays,
+    spaceWeatherHistoryEventType,
+    spaceWeatherHistoryMinSeverity,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2524,7 +2674,14 @@ export default function App() {
     }, 120000);
 
     return () => window.clearInterval(intervalId);
-  }, [isSpaceWeatherPage, propertyPreview?.latitude, propertyPreview?.longitude, spaceWeatherHistoryDays]);
+  }, [
+    isSpaceWeatherPage,
+    propertyPreview?.latitude,
+    propertyPreview?.longitude,
+    spaceWeatherHistoryDays,
+    spaceWeatherHistoryEventType,
+    spaceWeatherHistoryMinSeverity,
+  ]);
 
   useEffect(() => {
     if (!propertyPreview?.latitude || !propertyPreview?.longitude) {
@@ -2786,6 +2943,8 @@ export default function App() {
     setSpaceWeatherHistoryError("");
     setSpaceWeatherHistoryLoading(false);
     setSpaceWeatherHistoryDays(7);
+    setSpaceWeatherHistoryEventType("all");
+    setSpaceWeatherHistoryMinSeverity("low");
     setSurfaceIrradiance(null);
     setSurfaceIrradianceError("");
     setSurfaceIrradianceLoading(false);
@@ -2937,6 +3096,8 @@ export default function App() {
     setSpaceWeatherHistoryError("");
     setSpaceWeatherHistoryLoading(false);
     setSpaceWeatherHistoryDays(7);
+    setSpaceWeatherHistoryEventType("all");
+    setSpaceWeatherHistoryMinSeverity("low");
     setSurfaceIrradiance(null);
     setSurfaceIrradianceError("");
     setSurfaceIrradianceLoading(false);
@@ -4309,13 +4470,20 @@ export default function App() {
               loading={spaceWeatherHistoryLoading}
               error={spaceWeatherHistoryError}
               days={spaceWeatherHistoryDays}
+              eventType={spaceWeatherHistoryEventType}
+              minSeverity={spaceWeatherHistoryMinSeverity}
               onDaysChange={(nextDays) => {
                 setSpaceWeatherHistoryDays(nextDays);
+              }}
+              onEventTypeChange={(nextEventType) => {
+                setSpaceWeatherHistoryEventType(nextEventType);
+              }}
+              onMinSeverityChange={(nextSeverity) => {
+                setSpaceWeatherHistoryMinSeverity(nextSeverity);
               }}
               onRefresh={() => {
                 loadSpaceWeatherHistory({
                   forceRefresh: true,
-                  days: spaceWeatherHistoryDays,
                 });
               }}
             />
