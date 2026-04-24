@@ -207,6 +207,40 @@ function demoAspectToAzimuth(aspect) {
   return 180;
 }
 
+function normalizeAzimuth(value) {
+  const normalized = Number(value) % 360;
+  return normalized < 0 ? normalized + 360 : normalized;
+}
+
+function angularDistanceDegrees(left, right) {
+  const difference = Math.abs(normalizeAzimuth(left) - normalizeAzimuth(right));
+  return Math.min(difference, 360 - difference);
+}
+
+function calculateRoofCapacityBackedSystemSize(propertyContext, panelEfficiency) {
+  const roofCapacityContext = propertyContext?.roof_capacity_context;
+  if (!roofCapacityContext?.available) {
+    return null;
+  }
+
+  const usableRoofAreaSquareMeters = Number(
+    roofCapacityContext.usable_roof_area_square_meters || 0,
+  );
+  if (usableRoofAreaSquareMeters > 0) {
+    return Number(
+      clamp(usableRoofAreaSquareMeters * normalizePanelEfficiency(panelEfficiency), 1.5, 18).toFixed(
+        2,
+      ),
+    );
+  }
+
+  if (roofCapacityContext.recommended_system_size_kw == null) {
+    return null;
+  }
+
+  return Number(Number(roofCapacityContext.recommended_system_size_kw).toFixed(2));
+}
+
 function buildDemoProductionModel({
   systemSizeKw,
   monthlyAllSky,
@@ -219,6 +253,7 @@ function buildDemoProductionModel({
 }) {
   const normalizedPanelEfficiency = normalizePanelEfficiency(panelEfficiency);
   const siteContextAvailable = Boolean(propertyContext);
+  const roofCapacityContext = propertyContext?.roof_capacity_context || null;
   const obstructionRisk =
     propertyContext?.shade_context?.obstruction_risk ||
     propertyContext?.building_context?.obstruction_risk ||
@@ -232,23 +267,43 @@ function buildDemoProductionModel({
     : 1;
   const terrainAspect = propertyContext?.terrain_context?.dominant_aspect;
   const terrainSlope = Number(propertyContext?.terrain_context?.slope_percent || 0);
-  const assumedAzimuth = roofSelection ? 180 : demoAspectToAzimuth(terrainAspect);
+  const preferredAzimuth = demoAspectToAzimuth(terrainAspect);
+  let assumedAzimuth = roofSelection ? 180 : preferredAzimuth;
+  if (
+    !roofSelection &&
+    roofCapacityContext?.available &&
+    roofCapacityContext.dominant_edge_bearing != null
+  ) {
+    const candidateA = normalizeAzimuth(Number(roofCapacityContext.dominant_edge_bearing) + 90);
+    const candidateB = normalizeAzimuth(Number(roofCapacityContext.dominant_edge_bearing) - 90);
+    assumedAzimuth =
+      angularDistanceDegrees(candidateA, preferredAzimuth) <=
+      angularDistanceDegrees(candidateB, preferredAzimuth)
+        ? candidateA
+        : candidateB;
+  }
   const assumedTilt = Number(clamp(30 + Math.min(terrainSlope * 0.35, 5.5), 8, 45).toFixed(1));
   const modelId =
     sizingSource === "roof-geometry"
       ? "roof-backed-monthly-v2"
+      : sizingSource === "roof-footprint"
+        ? "parcel-roof-monthly-v1"
       : sizingSource === "address-context"
         ? "address-context-monthly-v1"
         : "manual-screening-monthly-v1";
   const modelLabel =
     sizingSource === "roof-geometry"
       ? "Roof-backed monthly model"
+      : sizingSource === "roof-footprint"
+        ? "Parcel roof monthly model"
       : sizingSource === "address-context"
         ? "Address-context monthly model"
         : "Manual screening monthly model";
   const modelDescription =
     sizingSource === "roof-geometry"
       ? "Uses month-by-month solar resource data, roof-backed DC sizing, inferred roof-facing assumptions, and first-pass site-context losses."
+      : sizingSource === "roof-footprint"
+        ? "Uses month-by-month solar resource data, a matched building footprint to infer usable roof capacity, footprint-derived roof-facing assumptions, and first-pass site-context losses."
       : sizingSource === "address-context"
         ? "Uses month-by-month solar resource data, address-level orientation and site-context assumptions, and the current system-size input until a roof polygon is drawn."
         : "Uses month-by-month solar resource data, the current manual system-size input, and generic orientation and site-loss fallbacks until property context is saved.";
@@ -258,7 +313,7 @@ function buildDemoProductionModel({
     soiling: 0.97,
     availability: 0.99,
     temperature: resolveTemperatureFactor(avgAllSkyRadiation),
-    layout: roofSelection ? 0.96 : siteContextAvailable ? 0.92 : 0.9,
+    layout: roofSelection ? 0.96 : sizingSource === "roof-footprint" ? 0.93 : siteContextAvailable ? 0.92 : 0.9,
     site_context: siteLossFactor,
   };
   const performanceRatio = Number(
@@ -301,6 +356,8 @@ function buildDemoProductionModel({
     estimate_mode:
       sizingSource === "roof-geometry"
         ? "roof-backed"
+        : sizingSource === "roof-footprint"
+          ? "parcel-roof-estimate"
         : sizingSource === "address-context"
           ? "address-context"
           : "manual-screening",
@@ -316,6 +373,8 @@ function buildDemoProductionModel({
       : "latitude fallback",
     azimuth_source: roofSelection
       ? "roof polygon dominant edge with solar-facing side selection"
+      : roofCapacityContext?.available && roofCapacityContext.dominant_edge_bearing != null
+        ? "matched building footprint dominant edge with terrain-aware side selection"
       : siteContextAvailable
         ? "terrain-aware fallback"
         : "south-facing fallback",
@@ -331,6 +390,10 @@ function buildDemoProductionModel({
     terrain_bias: propertyContext?.shade_context?.terrain_bias || null,
     building_pressure_score: propertyContext?.shade_context?.building_pressure_score ?? null,
     canopy_pressure_score: propertyContext?.shade_context?.canopy_pressure_score ?? null,
+    roof_capacity_available: Boolean(roofCapacityContext?.available),
+    roof_capacity_confidence: roofCapacityContext?.confidence || null,
+    estimated_roof_area_square_feet: roofCapacityContext?.usable_roof_area_square_feet ?? null,
+    estimated_roof_area_square_meters: roofCapacityContext?.usable_roof_area_square_meters ?? null,
     modeled_site_losses_percent: Number(((1 - siteLossFactor) * 100).toFixed(1)),
     monthly_production: monthlyProduction,
     monthly_savings: monthlySavings,
@@ -368,6 +431,14 @@ function buildDemoSolarAssumptions({
         ).toLocaleString()} sq ft, ${(normalizedPanelEfficiency * 100).toFixed(0)}% panel efficiency, and a ${(
           ROOF_COVERAGE_FACTOR * 100
         ).toFixed(0)}% roof coverage allowance.`
+      : sizingSource === "roof-footprint"
+        ? `Parcel roof estimate uses a matched building footprint with about ${Math.round(
+            productionModel?.estimated_roof_area_square_feet || 0,
+          ).toLocaleString()} sq ft of inferred usable roof area, ${(normalizedPanelEfficiency * 100).toFixed(
+            0,
+          )}% panel efficiency, and a ${(ROOF_COVERAGE_FACTOR * 100).toFixed(
+            0,
+          )}% usable-roof allowance.`
       : sizingSource === "address-context"
         ? `Address-only estimate uses a ${systemSizeKw.toFixed(1)} kW system size input while saved property context refines orientation and site-loss assumptions. Roof area and roof capacity are still not measured until a roof polygon is drawn.`
         : `System size uses a manual input of ${systemSizeKw.toFixed(1)} kW.`,
@@ -395,6 +466,9 @@ function buildDemoSolarConfidence({ matchQuality, sizingSource, roofSelection, p
   if (sizingSource === "roof-geometry" && roofSelection) {
     score += 22;
     factors.push("System size is derived from the saved roof geometry and panel efficiency.");
+  } else if (sizingSource === "roof-footprint") {
+    score += 18;
+    factors.push("System size is derived from a matched building footprint and assumed usable roof coverage.");
   } else if (sizingSource === "address-context") {
     score += 14;
     factors.push("System size uses the current address-only kW input until roof geometry is drawn.");
@@ -408,7 +482,11 @@ function buildDemoSolarConfidence({ matchQuality, sizingSource, roofSelection, p
     factors.push("Production uses month-by-month solar resource data and explicit system-loss assumptions.");
     if (productionModel.site_context_available) {
       score += 5;
-      factors.push("Address-level building, vegetation, and terrain context temper the production model.");
+      factors.push(
+        sizingSource === "roof-footprint"
+          ? "Matched building footprint plus nearby building, vegetation, and terrain context temper the production model."
+          : "Address-level building, vegetation, and terrain context temper the production model.",
+      );
     }
   }
 
@@ -429,11 +507,17 @@ function buildDemoSolarConfidence({ matchQuality, sizingSource, roofSelection, p
   if ((roofSelection?.areaSquareFeet || 0) < 350) {
     score -= 4;
     factors.push("The selected roof area is small, so the estimate is more sensitive to drawing changes.");
+  } else if ((productionModel?.estimated_roof_area_square_feet || 0) < 350 && sizingSource === "roof-footprint") {
+    score -= 3;
+    factors.push("The inferred usable roof area is small, so the estimate is more sensitive to roof-shape assumptions.");
   }
 
   if (sizingSource === "address-context") {
     score = Math.min(score, 78);
     factors.push("Drawing the roof area is the next step to graduate this from address-context to roof-backed sizing.");
+  } else if (sizingSource === "roof-footprint") {
+    score = Math.min(score, 84);
+    factors.push("Drawing the roof area is the next step to replace the matched-footprint estimate with roof-backed sizing.");
   } else if (sizingSource !== "roof-geometry") {
     score = Math.min(score, 68);
   }
@@ -521,11 +605,14 @@ function buildDemoEstimate(formValues) {
     (guid ? demoPropertyRecords.get(guid)?.property_preview?.match_quality : null) || "high";
   const sizingSource = effectiveRoofSelection
     ? "roof-geometry"
+    : effectivePropertyContext?.roof_capacity_context?.available
+      ? "roof-footprint"
     : effectivePropertyContext
       ? "address-context"
       : "manual";
   const systemSizeKw = Number(
     (calculateRoofBackedSystemSize(effectiveRoofSelection, panel_efficiency) ??
+      calculateRoofCapacityBackedSystemSize(effectivePropertyContext, panel_efficiency) ??
       system_size ??
       0).toFixed(2),
   );
@@ -613,18 +700,26 @@ function buildDemoEstimate(formValues) {
     estimate_mode:
       sizingSource === "roof-geometry"
         ? "roof-backed"
+        : sizingSource === "roof-footprint"
+          ? "parcel-roof-estimate"
         : sizingSource === "address-context"
           ? "address-context"
           : "manual-screening",
     sizing_note:
       sizingSource === "roof-geometry"
         ? "System size is derived from the saved roof geometry and panel efficiency."
+        : sizingSource === "roof-footprint"
+          ? `Parcel roof estimate uses a matched building footprint with about ${Math.round(
+              effectivePropertyContext?.roof_capacity_context?.usable_roof_area_square_feet || 0,
+            ).toLocaleString()} sq ft of inferred usable roof area and the current panel-efficiency setting.`
         : sizingSource === "address-context"
           ? `Address-only estimate uses a ${systemSizeKw.toFixed(1)} kW system size input while saved property context refines orientation and site-loss assumptions.`
           : `Manual screening estimate uses a ${systemSizeKw.toFixed(1)} kW system size input because no roof geometry or saved property context is available yet.`,
     next_input_needed:
       sizingSource === "roof-geometry"
         ? null
+        : sizingSource === "roof-footprint"
+          ? "Draw the usable roof area to replace the matched-footprint estimate with roof-backed geometry."
         : sizingSource === "address-context"
           ? "Draw the usable roof area to replace address-only sizing with roof-backed capacity."
           : "Locate the property context and draw the usable roof area to improve this estimate.",
@@ -633,8 +728,15 @@ function buildDemoEstimate(formValues) {
     electricity_rate_used: electricityRateUsed,
     rate_assumption_source: rateAssumptionSource,
     utility_context: normalizedUtilityContext,
-    roof_area_square_feet: effectiveRoofSelection?.areaSquareFeet ?? null,
-    roof_area_square_meters: effectiveRoofSelection?.areaSquareMeters ?? null,
+    roof_area_square_feet:
+      effectiveRoofSelection?.areaSquareFeet ??
+      effectivePropertyContext?.roof_capacity_context?.usable_roof_area_square_feet ??
+      null,
+    roof_area_square_meters:
+      effectiveRoofSelection?.areaSquareMeters ??
+      effectivePropertyContext?.roof_capacity_context?.usable_roof_area_square_meters ??
+      null,
+    roof_capacity_context: effectivePropertyContext?.roof_capacity_context ?? null,
     assumptions,
     confidence,
     production_model: productionModel,
@@ -697,6 +799,7 @@ function buildDemoHomeownerQuote(address, report, existingQuote = null) {
   const annualSavings = Math.round(report.annual_savings || 0);
   const annualProduction = Math.round(report.annual_production || 0);
   const hasRoofGeometry = report.sizing_source === "roof-geometry";
+  const hasRoofFootprint = report.sizing_source === "roof-footprint";
 
   return {
     id: quoteId,
@@ -708,7 +811,7 @@ function buildDemoHomeownerQuote(address, report, existingQuote = null) {
     summary: `${Number(report.system_size_kw || 0).toFixed(1)} kW, ${annualProduction.toLocaleString()} kWh/year, ${annualSavings.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })}/year savings.`,
     confidence_label: report.confidence?.label || "Planning",
     disclaimer:
-      `${hasRoofGeometry ? "This is a shareable planning quote based on the saved roof geometry" : "This is a shareable planning quote based on address-level context"} and current model assumptions. Final pricing, layout, and installer scope still require site review.`,
+      `${hasRoofGeometry ? "This is a shareable planning quote based on the saved roof geometry" : hasRoofFootprint ? "This is a shareable planning quote based on a matched building footprint" : "This is a shareable planning quote based on address-level context"} and current model assumptions. Final pricing, layout, and installer scope still require site review.`,
   };
 }
 
@@ -763,6 +866,7 @@ function saveDemoSolarReport({
     utility_context: estimate.utility_context,
     roof_area_square_feet: estimate.roof_area_square_feet,
     roof_area_square_meters: estimate.roof_area_square_meters,
+    roof_capacity_context: estimate.roof_capacity_context,
     production_model: estimate.production_model,
     monthly_production: estimate.monthly_production,
     monthly_savings: estimate.monthly_savings,
@@ -1726,6 +1830,8 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
   const nearbyBuildings = Array.from({ length: buildingCount }, (_, index) => {
     const distance = 16 + index * 11 + (seed % 5);
     const height = 7 + index * 4 + (seed % 4);
+    const grossFootprintAreaSquareFeet = 720 + index * 120 + (seed % 4) * 35;
+    const grossFootprintAreaSquareMeters = grossFootprintAreaSquareFeet / 10.7639;
     const directionBuckets = ["south", "southeast", "east", "northwest"];
     const directionBucket = directionBuckets[index % directionBuckets.length];
     const centroidLat = roundedLatitude + 0.00006 * (index + 1) * (index % 2 === 0 ? -1 : 1);
@@ -1760,6 +1866,11 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
       bearing_degrees: [188, 142, 96, 322][index % 4],
       shadow_pressure: Number((height / distance).toFixed(2)),
       obstruction_risk: height / distance >= 0.7 ? "high" : height / distance >= 0.35 ? "moderate" : "low",
+      footprint_area_square_meters: Number(grossFootprintAreaSquareMeters.toFixed(1)),
+      footprint_area_square_feet: Number(grossFootprintAreaSquareFeet.toFixed(1)),
+      centroid_within_match_envelope: index === 0,
+      dominant_edge_bearing: index % 2 === 0 ? 90 : 0,
+      dominant_edge_length_m: Number((12 + index * 1.8).toFixed(1)),
       centroid: {
         lat: Number(centroidLat.toFixed(6)),
         lng: Number(centroidLng.toFixed(6)),
@@ -1809,9 +1920,63 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
     };
   });
   const canopyPressureScore = Math.max(...Object.values(canopyDirectionalPressure));
+  const edgeBufferM = 4.8;
+  const planningCoreBounds = {
+    south: Number((envelope.south + (envelope.north - envelope.south) * 0.12).toFixed(6)),
+    north: Number((envelope.north - (envelope.north - envelope.south) * 0.12).toFixed(6)),
+    west: Number((envelope.west + (envelope.east - envelope.west) * 0.12).toFixed(6)),
+    east: Number((envelope.east - (envelope.east - envelope.west) * 0.12).toFixed(6)),
+  };
+  const planningCoreAreaSqM = Number((78.4 * 57.2 * 0.73).toFixed(1));
+  const estimatedPlantableShare = Number(
+    Math.max(
+      0.18,
+      Math.min(
+        0.73,
+        0.73 -
+          Math.min((nearbyBuildings.length * 0.015) + (nearbyBuildings[0]?.shadow_pressure || 0) * 0.08, 0.18) -
+          Math.min((nearbyCanopy.length * 0.01) + (nearbyCanopy[0]?.shadow_pressure || 0) * 0.07, 0.12) -
+          (terrainClass === "rolling" ? 0.06 : terrainClass === "steep" ? 0.12 : 0),
+      ),
+    ).toFixed(2),
+  );
+  const openSide =
+    directionalPressure.east + canopyDirectionalPressure.east <= directionalPressure.north + canopyDirectionalPressure.north
+      ? "east"
+      : "north";
+  const primaryBuilding = nearbyBuildings[0];
+  const usableRoofAreaSquareMeters = Number(
+    ((primaryBuilding?.footprint_area_square_meters || 0) * ROOF_COVERAGE_FACTOR).toFixed(1),
+  );
+  const usableRoofAreaSquareFeet = Number((usableRoofAreaSquareMeters * 10.7639).toFixed(1));
+  const roofCapacityContext = {
+    available: Boolean(primaryBuilding),
+    candidate_building_id: primaryBuilding?.id || null,
+    candidate_building_name: primaryBuilding?.name || null,
+    candidate_building_kind: primaryBuilding?.kind || null,
+    candidate_building_distance_m: primaryBuilding?.distance_m || null,
+    centroid_within_match_envelope: Boolean(primaryBuilding?.centroid_within_match_envelope),
+    gross_footprint_area_square_meters: primaryBuilding?.footprint_area_square_meters || null,
+    gross_footprint_area_square_feet: primaryBuilding?.footprint_area_square_feet || null,
+    usable_roof_area_square_meters: usableRoofAreaSquareMeters || null,
+    usable_roof_area_square_feet: usableRoofAreaSquareFeet || null,
+    recommended_system_size_kw: Number((usableRoofAreaSquareMeters * 0.2).toFixed(2)),
+    dominant_edge_bearing: primaryBuilding?.dominant_edge_bearing || null,
+    dominant_edge_length_m: primaryBuilding?.dominant_edge_length_m || null,
+    confidence: matchQuality === "high" ? "high" : "medium",
+    summary: `Matched building footprint suggests about ${Math.round(
+      primaryBuilding?.footprint_area_square_feet || 0,
+    ).toLocaleString()} sq ft of gross roof area, roughly ${Math.round(
+      usableRoofAreaSquareFeet || 0,
+    ).toLocaleString()} sq ft of usable solar area, and about ${(
+      usableRoofAreaSquareMeters * 0.2
+    ).toFixed(1)} kW of baseline capacity.`,
+    model_note:
+      "Roof-capacity inference is conservative and uses the matched building footprint plus a baseline usable-roof allowance.",
+  };
 
   return {
-    context_version: "property-context-v2",
+    context_version: "property-context-v3",
     latitude: roundedLatitude,
     longitude: roundedLongitude,
     match_quality: matchQuality || "high",
@@ -1821,6 +1986,31 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
       height_m: 57.2,
       source: bounds ? "geocoder-match-envelope" : "synthetic-planning-envelope",
       label: bounds ? "Geocoder match envelope" : "Planning envelope",
+    },
+    parcel_context: {
+      source: bounds ? "geocoder-match-envelope" : "synthetic-planning-envelope",
+      label: "Planning core",
+      bounds: envelope,
+      gross_area_sq_m: Number((78.4 * 57.2).toFixed(1)),
+      gross_area_sq_ft: Number((78.4 * 57.2 * 10.7639).toFixed(0)),
+      shape_class: "compact",
+      edge_buffer_m: edgeBufferM,
+      planning_core_bounds: planningCoreBounds,
+      planning_core_area_sq_m: planningCoreAreaSqM,
+      planning_core_area_sq_ft: Number((planningCoreAreaSqM * 10.7639).toFixed(0)),
+      planning_core_share: 0.73,
+      estimated_plantable_share: estimatedPlantableShare,
+      estimated_plantable_area_sq_m: Number(((78.4 * 57.2) * estimatedPlantableShare).toFixed(1)),
+      estimated_plantable_area_sq_ft: Number(((78.4 * 57.2) * estimatedPlantableShare * 10.7639).toFixed(0)),
+      terrain_limit: terrainClass === "rolling" ? "moderate" : terrainClass === "steep" ? "high" : "low",
+      open_side: openSide,
+      directional_open_score: {
+        north: Number((1.65 - directionalPressure.north - canopyDirectionalPressure.north).toFixed(2)),
+        south: Number((1.65 - directionalPressure.south - canopyDirectionalPressure.south).toFixed(2)),
+        east: Number((1.65 - directionalPressure.east - canopyDirectionalPressure.east).toFixed(2)),
+        west: Number((1.65 - directionalPressure.west - canopyDirectionalPressure.west).toFixed(2)),
+      },
+      summary: `Planning envelope covers about ${Number((78.4 * 57.2 * 10.7639).toFixed(0))} sq ft. An inset planning core keeps about ${Number((planningCoreAreaSqM * 10.7639).toFixed(0))} sq ft away from edge effects, with the most open side looking ${openSide}.`,
     },
     building_context: {
       source: "demo",
@@ -1866,9 +2056,10 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
             : "mostly neutral",
       summary: `Building, vegetation, and terrain cues read as ${obstructionRisk} obstruction risk.`,
     },
-    summary: `${buildingCount} nearby building footprints and ${canopyCount} canopy features found. Local terrain reads as ${terrainClass} with a ${dominantAspect} bias.`,
+    roof_capacity_context: roofCapacityContext,
+    summary: `${buildingCount} nearby building footprints and ${canopyCount} canopy features found. Local terrain reads as ${terrainClass} with a ${dominantAspect} bias. Planning envelope covers about ${Number((78.4 * 57.2 * 10.7639).toFixed(0))} sq ft. ${roofCapacityContext.summary}`,
     model_note:
-      "This context layer uses nearby buildings, mapped vegetation, and terrain cues. Fences and parcel-certified boundaries are not modeled yet.",
+      "This context layer uses nearby buildings, mapped vegetation, terrain cues, and an inset planning core from the address-match envelope. Fences and parcel-certified boundaries are not modeled yet.",
   };
 }
 

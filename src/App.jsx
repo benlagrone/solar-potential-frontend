@@ -78,7 +78,7 @@ const initialForm = {
 const modeContentByMode = {
   solar: {
     resultPanelCopy:
-      "Estimate output uses address-level site context for a quick pass, then switches to roof-backed sizing when a roof polygon is saved.",
+      "Estimate output starts with address and parcel-roof context for a quick pass, then switches to roof-backed sizing when a roof polygon is saved.",
   },
   garden: {
     resultPanelCopy:
@@ -89,10 +89,10 @@ const modeContentByMode = {
 const landingContentByPage = {
   solar: {
     title: "Locate the property and run the solar estimate.",
-    summary: "Address first. Run a contextual quick estimate, then draw the roof to refine.",
-    steps: ["Address", "Context", "Quick estimate", "Roof refine"],
+    summary: "Address first. Run a contextual quick estimate, then move from parcel roof to drawn roof.",
+    steps: ["Address", "Context", "Parcel roof", "Roof refine"],
     intakeTitle: "Run solar estimate",
-    intakeCopy: "Find the property, run the address-context estimate, and draw the roof when ready.",
+    intakeCopy: "Find the property, run the contextual parcel-roof estimate, and draw the roof when ready.",
     pageLabel: "Solar Buddy",
   },
   "space-weather": {
@@ -217,6 +217,32 @@ function formatAzimuthLabel(azimuth) {
   return `${formatLabel(getCompassDirection(azimuth))} ${formatNumber(azimuth, 0)}°`;
 }
 
+function normalizePanelEfficiency(value) {
+  return Math.max(0.15, Math.min(Number(value || 0.2), 0.27));
+}
+
+function getRoofCapacityEstimateKw(roofCapacityContext, panelEfficiency) {
+  if (!roofCapacityContext?.available) {
+    return null;
+  }
+
+  const usableRoofAreaSquareMeters = Number(
+    roofCapacityContext.usable_roof_area_square_meters || 0,
+  );
+  if (usableRoofAreaSquareMeters > 0) {
+    return Math.max(
+      1.5,
+      Math.min(usableRoofAreaSquareMeters * normalizePanelEfficiency(panelEfficiency), 18),
+    );
+  }
+
+  if (roofCapacityContext.recommended_system_size_kw == null) {
+    return null;
+  }
+
+  return Number(roofCapacityContext.recommended_system_size_kw);
+}
+
 function formatAddressLine(address) {
   if (!address) {
     return "Saved property";
@@ -312,6 +338,10 @@ function getSolarSizingLabel(sizingSource) {
     return "Roof-backed sizing";
   }
 
+  if (sizingSource === "roof-footprint") {
+    return "Parcel roof sizing";
+  }
+
   if (sizingSource === "address-context") {
     return "Address-context sizing";
   }
@@ -330,6 +360,10 @@ function getSolarSizingDetail(result) {
 
   if (result.sizing_source === "roof-geometry") {
     return "Derived from the saved roof selection.";
+  }
+
+  if (result.sizing_source === "roof-footprint") {
+    return "Uses a matched building footprint to infer usable roof area until a roof polygon is drawn.";
   }
 
   if (result.sizing_source === "address-context") {
@@ -1504,16 +1538,19 @@ function GardenClimatePanel({
 }
 
 function GardenSiteContextPanel({ context, loading, error, zone }) {
+  const parcelContext = context?.parcel_context || null;
+  const parcelPlacement = zone?.analysis?.parcelPlacement || null;
+
   return (
     <section className="panel garden-context-panel">
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Site context</p>
-          <h2>Nearby buildings, canopy, and terrain cues</h2>
+          <h2>Nearby buildings, canopy, terrain, and planning envelope</h2>
         </div>
         <p className="panel-copy">
-          This context layer now adds mapped canopy cues alongside building and terrain pressure. It
-          is still not parcel-certified or tree-perfect.
+          This context layer now adds mapped canopy cues plus an inset planning core from the saved
+          address-match envelope. It is still not parcel-certified or tree-perfect.
         </p>
       </div>
 
@@ -1545,6 +1582,14 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
               tone={(context.canopy_context?.canopy_count || 0) > 0 ? "watch" : "neutral"}
             />
             <LevelBadge
+              label={
+                parcelContext
+                  ? `Core ${formatNumber((parcelContext.planning_core_share || 0) * 100, 0)}%`
+                  : "Core pending"
+              }
+              tone={(parcelContext?.estimated_plantable_share || 0) >= 0.55 ? "low" : "watch"}
+            />
+            <LevelBadge
               label={`Terrain ${formatLabel(context.terrain_context?.terrain_class)}`}
               tone="neutral"
             />
@@ -1571,6 +1616,34 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
                 context.canopy_context?.nearest_canopy
                   ? `${formatNumber(context.canopy_context.nearest_canopy.distance_m || 0, 0)} m to nearest canopy`
                   : "No nearby mapped canopy in the current radius."
+              }
+            />
+            <StatCard
+              label="Planning core"
+              value={
+                parcelContext
+                  ? `${formatNumber(parcelContext.planning_core_area_sq_ft || 0, 0)} sq ft`
+                  : "Pending"
+              }
+              detail={
+                parcelContext
+                  ? `${formatNumber(parcelContext.edge_buffer_m || 0, 1)} m edge buffer · ${formatLabel(
+                      parcelContext.shape_class,
+                    )}`
+                  : "Parcel-aware planning core has not loaded yet."
+              }
+            />
+            <StatCard
+              label="Plantable ground"
+              value={
+                parcelContext
+                  ? `${formatNumber((parcelContext.estimated_plantable_share || 0) * 100, 0)}%`
+                  : "Pending"
+              }
+              detail={
+                parcelContext?.open_side
+                  ? `${formatLabel(parcelContext.open_side)} side looks most open`
+                  : "Open-side cue unavailable."
               }
             />
             <StatCard
@@ -1622,6 +1695,15 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
                   : "Draw or select a zone to see the local pressure."
               }
             />
+            <StatCard
+              label="Selected zone siting"
+              value={parcelPlacement?.label || "Pending zone"}
+              detail={
+                parcelPlacement
+                  ? `${formatNumber(parcelPlacement.coreCoverageRatio * 100, 0)}% inside planning core`
+                  : "Draw or select a zone to score siting against the planning core."
+              }
+            />
           </div>
 
           <div className="guidance-stack">
@@ -1666,14 +1748,36 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
             </article>
 
             <article className="guidance-card">
+              <strong>Planning envelope</strong>
+              {parcelContext ? (
+                <div className="status-list">
+                  <div className="status-row">
+                    <strong>Planning core</strong>
+                    <p>{parcelContext.summary}</p>
+                  </div>
+                  <div className="status-row">
+                    <strong>Selected zone siting</strong>
+                    <p>
+                      {parcelPlacement
+                        ? parcelPlacement.summary
+                        : "Draw or select a zone to compare it against the inset planning core."}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <p>Parcel-aware siting guidance is not available for this property yet.</p>
+              )}
+            </article>
+
+            <article className="guidance-card">
               <strong>What changed in Garden Buddy</strong>
               <div className="status-list">
                 <div className="status-row">
                   <strong>Zone model</strong>
                   <p>
                     Zone sun hours now temper the open-sky estimate with nearby building pressure,
-                    mapped canopy cues, and a light terrain bias instead of relying on latitude and
-                    lot position alone.
+                    mapped canopy cues, a light terrain bias, and an inset planning core instead of
+                    relying on latitude and lot position alone.
                   </p>
                 </div>
                 <div className="status-row">
@@ -2092,6 +2196,12 @@ export default function App() {
     [form.address],
   );
   const propertyLocated = Boolean(propertyPreview);
+  const roofCapacityContext = propertyContext?.roof_capacity_context || null;
+  const hasRoofCapacityEstimate = Boolean(!roofSelection && roofCapacityContext?.available);
+  const previewRoofCapacityKw = getRoofCapacityEstimateKw(
+    roofCapacityContext,
+    form.panel_efficiency,
+  );
   const solarReadyForEstimate =
     propertyLocated &&
     Boolean(propertyRecordGuid) &&
@@ -2111,7 +2221,13 @@ export default function App() {
       )} kWh of yearly production using a ${formatNumber(
         result.system_size_kw || roofSelection?.recommendedKw || form.system_size,
         1,
-      )} kW ${result.sizing_source === "roof-geometry" ? "roof-backed" : "address-context"} system size.`
+      )} kW ${
+        result.sizing_source === "roof-geometry"
+          ? "roof-backed"
+          : result.sizing_source === "roof-footprint"
+            ? "parcel roof"
+            : "address-context"
+      } system size.`
     : null;
 
   const analyzedGardenZones = useMemo(
@@ -2422,8 +2538,11 @@ export default function App() {
       return;
     }
 
+    const hasRequiredSolarContext =
+      !isSolarPage || Object.hasOwn(propertyContext || {}, "roof_capacity_context");
     const coordinatesMatch =
       String(propertyContext?.context_version || "").startsWith("property-context-v") &&
+      hasRequiredSolarContext &&
       Math.abs((propertyContext?.latitude || 0) - propertyPreview.latitude) < 0.000001 &&
       Math.abs((propertyContext?.longitude || 0) - propertyPreview.longitude) < 0.000001;
     if (coordinatesMatch) {
@@ -3283,6 +3402,8 @@ export default function App() {
                         ? "Saving property..."
                         : roofSelection
                           ? "Calculate solar estimate"
+                          : hasRoofCapacityEstimate
+                            ? "Run parcel roof estimate"
                           : "Run address estimate"}
                 </button>
               ) : null}
@@ -3292,20 +3413,26 @@ export default function App() {
               <>
                 <div className="field-row">
                   <label>
-                    {roofSelection ? "Roof-backed system size" : "Address-only system size (kW)"}
+                    {roofSelection
+                      ? "Roof-backed system size"
+                      : hasRoofCapacityEstimate
+                        ? "Parcel roof estimate"
+                        : "Address-only system size (kW)"}
                     <input
-                      type={roofSelection ? "text" : "number"}
-                      min={roofSelection ? undefined : "0.1"}
-                      step={roofSelection ? undefined : "0.1"}
-                      readOnly={Boolean(roofSelection)}
+                      type={roofSelection || hasRoofCapacityEstimate ? "text" : "number"}
+                      min={roofSelection || hasRoofCapacityEstimate ? undefined : "0.1"}
+                      step={roofSelection || hasRoofCapacityEstimate ? undefined : "0.1"}
+                      readOnly={Boolean(roofSelection || hasRoofCapacityEstimate)}
                       required
                       value={
                         roofSelection
                           ? `${formatNumber(roofSelection.recommendedKw, 1)} kW from drawn roof`
+                          : hasRoofCapacityEstimate
+                            ? `${formatNumber(previewRoofCapacityKw || 0, 1)} kW from matched footprint`
                           : form.system_size
                       }
                       onChange={(event) => {
-                        if (!roofSelection) {
+                        if (!roofSelection && !hasRoofCapacityEstimate) {
                           updateNumber("system_size", event.target.value);
                         }
                       }}
@@ -3313,6 +3440,8 @@ export default function App() {
                     <span className="field-hint">
                       {roofSelection
                         ? "Drawn roof geometry controls the system size."
+                        : hasRoofCapacityEstimate
+                          ? "Matched building footprint and current panel efficiency control the quick estimate."
                         : "Used for the quick estimate until the usable roof area is drawn."}
                     </span>
                   </label>
@@ -3471,6 +3600,21 @@ export default function App() {
             </div>
           ) : null}
 
+          {isSolarPage && !roofSelection && hasRoofCapacityEstimate ? (
+            <div className="status-card">
+              <span className="status-label">Parcel roof estimate</span>
+              <strong>
+                ~{formatNumber(roofCapacityContext?.usable_roof_area_square_feet || 0, 0)} sq ft
+                usable roof area from a matched building footprint
+              </strong>
+              <p>
+                That suggests about {formatNumber(previewRoofCapacityKw || 0, 1)} kW at the current
+                panel efficiency. Draw the actual roof polygon to replace this inferred parcel
+                estimate with roof-backed sizing.
+              </p>
+            </div>
+          ) : null}
+
           {isSolarPage && propertyPreview ? (
             <div className={`status-card ${propertyContextLoading && !propertyContext ? "status-card-muted" : ""}`}>
               <span className="status-label">Solar site context</span>
@@ -3485,7 +3629,9 @@ export default function App() {
               </strong>
               <p>
                 {propertyContext
-                  ? `${propertyContext.summary} Solar production now uses this context when it refines tilt, roof-facing assumptions, and site losses.`
+                  ? hasRoofCapacityEstimate
+                    ? `${propertyContext.summary} Solar production now uses this context to infer matched-footprint roof capacity, refine tilt and azimuth, and model site losses.`
+                    : `${propertyContext.summary} Solar production now uses this context when it refines tilt, roof-facing assumptions, and site losses.`
                   : propertyContextError
                     ? propertyContextError
                     : "The estimate will use generic site assumptions until nearby building, canopy, and terrain context is available."}
@@ -3619,13 +3765,15 @@ export default function App() {
                       label="Roof area"
                       value={
                         result.roof_area_square_feet
-                          ? `${formatNumber(result.roof_area_square_feet, 0)} sq ft`
+                          ? `${result.sizing_source === "roof-footprint" ? "~" : ""}${formatNumber(result.roof_area_square_feet, 0)} sq ft`
                           : roofSelection
                             ? `${formatNumber(roofSelection.areaSquareFeet, 0)} sq ft`
                             : "Address-only"
                       }
                       detail={
-                        result.roof_area_square_feet
+                        result.sizing_source === "roof-footprint"
+                          ? `${formatNumber(result.system_size_kw, 1)} kW from matched building footprint`
+                          : result.roof_area_square_feet
                           ? `${formatNumber(result.system_size_kw, 1)} kW used in estimate`
                           : roofSelection
                             ? `${formatNumber(roofSelection.recommendedKw, 1)} kW suggested`
@@ -3887,7 +4035,10 @@ export default function App() {
                         )} modeled sun hours per day from April through September.${selectedGardenZone.analysis.contextAdjustment?.maxMonthlyPenaltyHours ? ` Nearby structures can trim the open-sky estimate by as much as ${formatNumber(
                           selectedGardenZone.analysis.contextAdjustment.maxMonthlyPenaltyHours,
                           1,
-                        )} hrs/day in the strongest month.` : ""}${propertyClimate?.growing_season?.average_temperature_f != null && propertyClimate?.growing_season?.average_relative_humidity != null ? ` Property climate for that same window averages about ${formatNumber(
+                        )} hrs/day in the strongest month.` : ""}${selectedGardenZone.analysis.parcelPlacement ? ` ${selectedGardenZone.analysis.parcelPlacement.label} with about ${formatNumber(
+                          selectedGardenZone.analysis.parcelPlacement.coreCoverageRatio * 100,
+                          0,
+                        )}% of sampled zone points staying inside the current planning core.` : ""}${propertyClimate?.growing_season?.average_temperature_f != null && propertyClimate?.growing_season?.average_relative_humidity != null ? ` Property climate for that same window averages about ${formatNumber(
                           propertyClimate.growing_season.average_temperature_f,
                           1,
                         )}°F and ${formatNumber(
@@ -3965,15 +4116,33 @@ export default function App() {
                       label="Context slice"
                       value={
                         propertyContext
-                          ? (propertyContext.canopy_context?.canopy_count || 0) > 0
-                            ? "Buildings + canopy + terrain"
-                            : "Buildings + terrain"
+                          ? propertyContext.parcel_context
+                            ? "Buildings + canopy + terrain + planning core"
+                            : (propertyContext.canopy_context?.canopy_count || 0) > 0
+                              ? "Buildings + canopy + terrain"
+                              : "Buildings + terrain"
                           : "Open sky only"
                       }
                       detail={
                         propertyContext
-                          ? `${propertyContext.building_context?.building_count || 0} nearby buildings and ${propertyContext.canopy_context?.canopy_count || 0} canopy features in the current context radius`
+                          ? propertyContext.parcel_context
+                            ? `${propertyContext.building_context?.building_count || 0} nearby buildings, ${propertyContext.canopy_context?.canopy_count || 0} canopy features, and ${formatNumber(propertyContext.parcel_context.planning_core_area_sq_ft || 0, 0)} sq ft inside the planning core`
+                            : `${propertyContext.building_context?.building_count || 0} nearby buildings and ${propertyContext.canopy_context?.canopy_count || 0} canopy features in the current context radius`
                           : "Site context has not loaded yet."
+                      }
+                    />
+                    <StatCard
+                      label="Zone siting"
+                      value={selectedGardenZone?.analysis?.parcelPlacement?.label || "Pending"}
+                      detail={
+                        selectedGardenZone?.analysis?.parcelPlacement
+                          ? `${formatNumber(
+                              selectedGardenZone.analysis.parcelPlacement.coreCoverageRatio * 100,
+                              0,
+                            )}% inside planning core · ${formatLabel(
+                              selectedGardenZone.analysis.parcelPlacement.terrainLimit,
+                            )} terrain constraint`
+                          : "Zone siting appears after the planning core is available."
                       }
                     />
                   </div>
@@ -4008,9 +4177,11 @@ export default function App() {
                       <span>Model boundary</span>
                       <strong>
                         {propertyContext
-                          ? (propertyContext.canopy_context?.canopy_count || 0) > 0
-                            ? "Buildings, canopy, and terrain cues"
-                            : "Buildings and terrain only"
+                          ? propertyContext.parcel_context
+                            ? "Planning core + site-context cues"
+                            : (propertyContext.canopy_context?.canopy_count || 0) > 0
+                              ? "Buildings, canopy, and terrain cues"
+                              : "Buildings and terrain only"
                           : "No tree or building shade yet"}
                       </strong>
                     </article>
@@ -4080,6 +4251,9 @@ export default function App() {
                             )}{" "}
                             m away.
                           </p>
+                        ) : null}
+                        {selectedGardenZone.analysis.parcelPlacement ? (
+                          <p>{selectedGardenZone.analysis.parcelPlacement.summary}</p>
                         ) : null}
                         <p>{selectedGardenZone.analysis.sunClass.description}</p>
                       </div>
