@@ -1,3 +1,5 @@
+import { getPolygonPoints } from "./geometry.js";
+
 const monthDefinitions = [
   { key: "01", label: "Jan", dayOfYear: 21 },
   { key: "02", label: "Feb", dayOfYear: 52 },
@@ -48,7 +50,7 @@ const sunClasses = [
 ];
 
 export const gardenAnalysisModelNote =
-  "First-pass open-sky estimate based on latitude and zone placement on the lot. Trees, fences, nearby buildings, and exact parcel data are not modeled yet.";
+  "First-pass open-sky estimate based on latitude and zone placement on the lot. Trees, fences, nearby buildings, and parcel-certified boundaries are not modeled yet.";
 
 const obstructionWeightByDirection = {
   north: { winter: 0.08, shoulder: 0.05, summer: 0.03 },
@@ -229,7 +231,7 @@ function getLotPositionLabel(southOffset) {
   return "Near the middle of the property";
 }
 
-function getConfidence(matchQuality, areaSquareFeet) {
+function getConfidence(matchQuality, areaSquareFeet, parcelPlacement = null) {
   let score = 0.28;
 
   if (matchQuality === "high") {
@@ -247,6 +249,16 @@ function getConfidence(matchQuality, areaSquareFeet) {
   } else if (areaSquareFeet >= 30) {
     score += 0.06;
   }
+
+  if (parcelPlacement?.id === "core") {
+    score += 0.08;
+  } else if (parcelPlacement?.id === "outside-core") {
+    score -= 0.08;
+  } else if (parcelPlacement?.id === "outside-envelope") {
+    score -= 0.14;
+  }
+
+  score = clamp(score, 0.22, 0.9);
 
   if (score >= 0.66) {
     return {
@@ -341,6 +353,111 @@ function getTerrainBias(propertyContext) {
     winter: 0,
     shoulder: 0,
     summer: 0,
+  };
+}
+
+function isPointInBounds(point, bounds) {
+  if (!point || !bounds) {
+    return false;
+  }
+
+  return (
+    point.lat >= bounds.south &&
+    point.lat <= bounds.north &&
+    point.lng >= bounds.west &&
+    point.lng <= bounds.east
+  );
+}
+
+function getMetersToBoundsEdge(point, bounds) {
+  if (!point || !bounds || !isPointInBounds(point, bounds)) {
+    return 0;
+  }
+
+  return Math.min(
+    haversineMeters(point.lat, point.lng, bounds.north, point.lng),
+    haversineMeters(point.lat, point.lng, bounds.south, point.lng),
+    haversineMeters(point.lat, point.lng, point.lat, bounds.west),
+    haversineMeters(point.lat, point.lng, point.lat, bounds.east),
+  );
+}
+
+function buildParcelPlacement(zone, propertyContext) {
+  const parcelContext = propertyContext?.parcel_context;
+  const planningCoreBounds = parcelContext?.planning_core_bounds;
+  const envelopeBounds = parcelContext?.bounds || propertyContext?.match_envelope?.bounds;
+
+  if (!parcelContext || !planningCoreBounds) {
+    return null;
+  }
+
+  const polygonPoints = getPolygonPoints(zone.geometry);
+  const samplePoints = [...polygonPoints, zone.centroid].filter(Boolean);
+  if (!samplePoints.length) {
+    return null;
+  }
+
+  const coreCoverageRatio = clamp(
+    samplePoints.filter((point) => isPointInBounds(point, planningCoreBounds)).length /
+      samplePoints.length,
+    0,
+    1,
+  );
+  const envelopeCoverageRatio = clamp(
+    samplePoints.filter((point) => isPointInBounds(point, envelopeBounds)).length / samplePoints.length,
+    0,
+    1,
+  );
+  const centroidClearanceM = zone.centroid
+    ? round(getMetersToBoundsEdge(zone.centroid, planningCoreBounds), 1)
+    : 0;
+  const edgeBufferM = Number(parcelContext.edge_buffer_m || 0);
+  const openSide = parcelContext.open_side || null;
+  const terrainLimit = parcelContext.terrain_limit || "low";
+  const estimatedPlantableShare = Number(parcelContext.estimated_plantable_share || 0);
+
+  let id = "edge-watch";
+  let label = "Edge watch";
+  let description =
+    "Part of this zone pushes toward the saved planning-envelope edge, so treat placement as provisional.";
+
+  if (envelopeCoverageRatio < 0.65) {
+    id = "outside-envelope";
+    label = "Outside planning envelope";
+    description =
+      "This zone extends beyond most of the saved planning envelope, so Garden Buddy treats it as low-confidence siting.";
+  } else if (coreCoverageRatio >= 0.82) {
+    id = "core";
+    label = "Inside planning core";
+    description =
+      "This zone stays mostly inside the inset planning core, so it is a stronger candidate for repeat planning.";
+  } else if (coreCoverageRatio < 0.45) {
+    id = "outside-core";
+    label = "Outside planning core";
+    description =
+      "Most of this zone sits outside the inset planning core, so use it as a sketch until parcel placement is tightened.";
+  }
+
+  const openSidePhrase = openSide ? `The most open side currently reads ${openSide}.` : "";
+  const terrainPhrase =
+    terrainLimit === "high"
+      ? "Terrain still looks constraining here."
+      : terrainLimit === "moderate"
+        ? "Terrain adds some siting constraint."
+        : "Terrain does not add much siting pressure.";
+
+  return {
+    id,
+    label,
+    description,
+    coreCoverageRatio: round(coreCoverageRatio, 2),
+    envelopeCoverageRatio: round(envelopeCoverageRatio, 2),
+    centroidClearanceM,
+    edgeBufferM: round(edgeBufferM, 1),
+    openSide,
+    terrainLimit,
+    estimatedPlantableShare: round(estimatedPlantableShare, 2),
+    summary: `${description} ${openSidePhrase} ${terrainPhrase}`.trim(),
   };
 }
 
@@ -590,6 +707,7 @@ function analyzeGardenZone(zone, propertyPreview, propertyContext) {
     propertyContext,
     openSkyMonthlySunHours,
   );
+  const parcelPlacement = buildParcelPlacement(zone, propertyContext);
   const monthlySunHours = contextAdjustment.monthlySunHours;
   const growingSeasonAverageSunHours = averageValues(monthlySunHours, [
     "04",
@@ -616,7 +734,7 @@ function analyzeGardenZone(zone, propertyPreview, propertyContext) {
   const southOffset = getSouthOffset(zone, propertyPreview);
   const obstructionRisk = getObstructionRisk(contextAdjustment.totalPenaltyHours);
   const contextModelNote = propertyContext
-    ? "Adjusted from the open-sky model using nearby building footprints, mapped canopy cues, and terrain bias. Parcel-certified boundaries and tree-perfect shade geometry are still not modeled."
+    ? "Adjusted from the open-sky model using nearby building footprints, mapped canopy cues, terrain bias, and an inset planning core derived from the saved property envelope. Parcel-certified boundaries and tree-perfect shade geometry are still not modeled."
     : gardenAnalysisModelNote;
 
   return {
@@ -632,8 +750,9 @@ function analyzeGardenZone(zone, propertyPreview, propertyContext) {
       bestMonth,
       lowestMonth,
       lotPositionLabel: getLotPositionLabel(southOffset),
-      confidence: getConfidence(propertyPreview?.match_quality, zone.areaSquareFeet || 0),
+      confidence: getConfidence(propertyPreview?.match_quality, zone.areaSquareFeet || 0, parcelPlacement),
       obstructionRisk,
+      parcelPlacement,
       contextAdjustment: {
         strongestBuilding: contextAdjustment.strongestBuilding,
         strongestCanopy: contextAdjustment.strongestCanopy,

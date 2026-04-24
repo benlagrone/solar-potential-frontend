@@ -577,6 +577,7 @@ export default function PropertyMap({
 }) {
   const [styleId, setStyleId] = useState(mode === "space-weather" ? "terrain" : "streets");
   const [showContextEnvelope, setShowContextEnvelope] = useState(mode === "garden");
+  const [showPlanningCore, setShowPlanningCore] = useState(mode === "garden");
   const [showBuildingContext, setShowBuildingContext] = useState(mode === "garden");
   const activeStyle = mapStyles[styleId];
   const isDrawing = Boolean(drawingTarget);
@@ -587,6 +588,7 @@ export default function PropertyMap({
   useEffect(() => {
     setStyleId(mode === "space-weather" ? "terrain" : "streets");
     setShowContextEnvelope(mode === "garden");
+    setShowPlanningCore(mode === "garden");
     setShowBuildingContext(mode === "garden");
   }, [mode]);
 
@@ -610,6 +612,17 @@ export default function PropertyMap({
   );
   const propertyContextBounds = useMemo(() => {
     const bounds = propertyContext?.match_envelope?.bounds;
+    if (!bounds) {
+      return null;
+    }
+
+    return [
+      [bounds.south, bounds.west],
+      [bounds.north, bounds.east],
+    ];
+  }, [propertyContext]);
+  const planningCoreBounds = useMemo(() => {
+    const bounds = propertyContext?.parcel_context?.planning_core_bounds;
     if (!bounds) {
       return null;
     }
@@ -775,6 +788,13 @@ export default function PropertyMap({
           </button>
           <button
             type="button"
+            className={`map-style-button ${showPlanningCore ? "map-style-button-active" : ""}`}
+            onClick={() => setShowPlanningCore((current) => !current)}
+          >
+            {showPlanningCore ? "Hide planning core" : "Show planning core"}
+          </button>
+          <button
+            type="button"
             className={`map-style-button ${showBuildingContext ? "map-style-button-active" : ""}`}
             onClick={() => setShowBuildingContext((current) => !current)}
           >
@@ -782,7 +802,8 @@ export default function PropertyMap({
           </button>
           <span className="map-context-copy">
             {propertyContext.building_context?.building_count || 0} nearby buildings ·{" "}
-            {propertyContext.terrain_context?.terrain_class || "terrain"} terrain
+            {propertyContext.canopy_context?.canopy_count || 0} canopy features ·{" "}
+            {Math.round(propertyContext.parcel_context?.planning_core_area_sq_ft || 0)} sq ft core
           </span>
         </div>
       ) : null}
@@ -827,6 +848,19 @@ export default function PropertyMap({
                 weight: 2,
                 dashArray: "8 6",
                 fillOpacity: 0,
+              }}
+            />
+          ) : null}
+
+          {showPlanningCore && planningCoreBounds ? (
+            <Rectangle
+              bounds={planningCoreBounds}
+              pathOptions={{
+                color: "#1f6c5c",
+                weight: 2,
+                dashArray: "4 5",
+                fillColor: "#1f6c5c",
+                fillOpacity: 0.05,
               }}
             />
           ) : null}
@@ -896,6 +930,8 @@ export default function PropertyMap({
                     {zone.analysis.growingSeasonAverageSunHours.toFixed(1)} hrs/day Apr-Sep
                     <br />
                     Obstruction risk: {zone.analysis.obstructionRisk?.label || "Pending"}
+                    <br />
+                    Siting: {zone.analysis.parcelPlacement?.label || "Pending"}
                   </>
                 ) : null}
               </Popup>
@@ -972,13 +1008,14 @@ export default function PropertyMap({
         ) : null}
         {isGardenMode && propertyContext ? (
           <span className="map-note">
-            Context overlays use nearby OpenStreetMap building footprints and terrain samples. They
-            are planning cues, not certified parcel or canopy data.
+            Context overlays use nearby OpenStreetMap building footprints, canopy features, terrain
+            samples, and an inset planning core. They are planning cues, not certified parcel data.
           </span>
         ) : null}
         {showPreviewBounds ? (
           <span className="map-note">
-            The outline shown is the geocoder match envelope, not a parcel boundary.
+            The outer outline is the geocoder match envelope. The inner dashed rectangle is the
+            inset planning core, not a parcel boundary.
           </span>
         ) : null}
         {preview?.match_quality && preview.match_quality !== "high" ? (
