@@ -1974,10 +1974,102 @@ function buildDemoPropertyClimate(coordinates) {
   };
 }
 
+function demoMetersToLatitudeDelta(meters) {
+  return (meters / 6371000) * (180 / Math.PI);
+}
+
+function demoMetersToLongitudeDelta(meters, latitude) {
+  const cosine = Math.max(Math.cos((latitude * Math.PI) / 180), 0.2);
+  return (meters / (6371000 * cosine)) * (180 / Math.PI);
+}
+
+function buildDemoCenteredBounds(latitude, longitude, widthMeters, heightMeters) {
+  return {
+    south: Number((latitude - demoMetersToLatitudeDelta(heightMeters / 2)).toFixed(6)),
+    north: Number((latitude + demoMetersToLatitudeDelta(heightMeters / 2)).toFixed(6)),
+    west: Number((longitude - demoMetersToLongitudeDelta(widthMeters / 2, latitude)).toFixed(6)),
+    east: Number((longitude + demoMetersToLongitudeDelta(widthMeters / 2, latitude)).toFixed(6)),
+  };
+}
+
+function getDemoDirectionGroup(latitudeDelta, longitudeDelta) {
+  if (Math.abs(latitudeDelta) >= Math.abs(longitudeDelta)) {
+    return latitudeDelta >= 0 ? "north" : "south";
+  }
+
+  return longitudeDelta >= 0 ? "east" : "west";
+}
+
+function getDemoOppositeDirection(direction) {
+  return {
+    north: "south",
+    south: "north",
+    east: "west",
+    west: "east",
+  }[direction] || null;
+}
+
+function buildDemoGardenEnvelope({
+  latitude,
+  longitude,
+  widthMeters,
+  heightMeters,
+  primaryBuilding,
+}) {
+  const centroid = primaryBuilding?.centroid;
+  if (!centroid) {
+    return {
+      bounds: buildDemoCenteredBounds(latitude, longitude, widthMeters, heightMeters),
+      focusAnchor: null,
+    };
+  }
+
+  const streetSide = getDemoDirectionGroup(latitude - centroid.lat, longitude - centroid.lng);
+  const gardenSide = getDemoOppositeDirection(streetSide);
+  const axisSpanMeters = gardenSide === "north" || gardenSide === "south" ? heightMeters : widthMeters;
+  const buildingSpanMeters = Math.sqrt(Number(primaryBuilding?.footprint_area_square_meters || 0));
+  const shiftMeters = Number(
+    clamp(
+      Math.max(axisSpanMeters * 0.22, buildingSpanMeters * 0.9, 6),
+      6,
+      Math.max(axisSpanMeters * 0.32, 10),
+    ).toFixed(1),
+  );
+
+  let centerLat = centroid.lat;
+  let centerLng = centroid.lng;
+  if (gardenSide === "north") {
+    centerLat += demoMetersToLatitudeDelta(shiftMeters);
+  } else if (gardenSide === "south") {
+    centerLat -= demoMetersToLatitudeDelta(shiftMeters);
+  } else if (gardenSide === "east") {
+    centerLng += demoMetersToLongitudeDelta(shiftMeters, centroid.lat);
+  } else if (gardenSide === "west") {
+    centerLng -= demoMetersToLongitudeDelta(shiftMeters, centroid.lat);
+  }
+
+  return {
+    bounds: buildDemoCenteredBounds(centerLat, centerLng, widthMeters, heightMeters),
+    focusAnchor: {
+      source: "primary-building-centroid",
+      primary_building_id: primaryBuilding?.id || null,
+      street_side: streetSide,
+      garden_side: gardenSide,
+      shift_m: shiftMeters,
+      center: {
+        lat: Number(centerLat.toFixed(6)),
+        lng: Number(centerLng.toFixed(6)),
+      },
+    },
+  };
+}
+
 function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality }) {
   const roundedLatitude = Number(latitude.toFixed(6));
   const roundedLongitude = Number(longitude.toFixed(6));
   const seed = Math.abs(Math.round((roundedLatitude * 13 + roundedLongitude * 19) * 100));
+  const envelopeWidthMeters = 78.4;
+  const envelopeHeightMeters = 57.2;
   const envelope =
     bounds ?? {
       south: Number((roundedLatitude - 0.00024).toFixed(6)),
@@ -2061,12 +2153,32 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
     const distance = 12 + index * 9 + (seed % 6);
     const directionBuckets = ["west", "southwest", "south", "east"];
     const directionBucket = directionBuckets[index % directionBuckets.length];
+    const centroidLat = Number((roundedLatitude + 0.00005 * (index + 1)).toFixed(6));
+    const centroidLng = Number((roundedLongitude - 0.00006 * (index + 1)).toFixed(6));
+    const heightMeters = Number((8 + index * 2 + (seed % 3)).toFixed(1));
+    const canopyPressure = Number(((8 + index * 2) / distance).toFixed(2));
+    const geometry =
+      index % 2 === 0
+        ? {
+            type: "Point",
+            coordinates: [centroidLng, centroidLat],
+          }
+        : {
+            type: "Polygon",
+            coordinates: [[
+              [Number((centroidLng - 0.00008).toFixed(6)), Number((centroidLat + 0.00006).toFixed(6))],
+              [Number((centroidLng + 0.00008).toFixed(6)), Number((centroidLat + 0.00006).toFixed(6))],
+              [Number((centroidLng + 0.00008).toFixed(6)), Number((centroidLat - 0.00006).toFixed(6))],
+              [Number((centroidLng - 0.00008).toFixed(6)), Number((centroidLat - 0.00006).toFixed(6))],
+              [Number((centroidLng - 0.00008).toFixed(6)), Number((centroidLat + 0.00006).toFixed(6))],
+            ]],
+          };
 
     return {
       id: `demo-canopy-${index + 1}`,
       name: index === 0 ? "Street tree" : `Canopy ${index + 1}`,
-      kind: index % 2 === 0 ? "tree" : "wooded strip",
-      height_m: Number((8 + index * 2 + (seed % 3)).toFixed(1)),
+      kind: index % 2 === 0 ? "tree" : "woodland edge",
+      height_m: heightMeters,
       distance_m: Number(distance.toFixed(1)),
       direction_bucket: directionBucket,
       direction_group:
@@ -2077,22 +2189,16 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
             : directionBucket.includes("east")
               ? "east"
               : "west",
-      shadow_pressure: Number(((8 + index * 2) / distance).toFixed(2)),
+      canopy_pressure: canopyPressure,
       centroid: {
-        lat: Number((roundedLatitude + 0.00005 * (index + 1)).toFixed(6)),
-        lng: Number((roundedLongitude - 0.00006 * (index + 1)).toFixed(6)),
+        lat: centroidLat,
+        lng: centroidLng,
       },
+      geometry,
     };
   });
   const canopyPressureScore = Math.max(...Object.values(canopyDirectionalPressure));
   const edgeBufferM = 4.8;
-  const planningCoreBounds = {
-    south: Number((envelope.south + (envelope.north - envelope.south) * 0.12).toFixed(6)),
-    north: Number((envelope.north - (envelope.north - envelope.south) * 0.12).toFixed(6)),
-    west: Number((envelope.west + (envelope.east - envelope.west) * 0.12).toFixed(6)),
-    east: Number((envelope.east - (envelope.east - envelope.west) * 0.12).toFixed(6)),
-  };
-  const planningCoreAreaSqM = Number((78.4 * 57.2 * 0.73).toFixed(1));
   const estimatedPlantableShare = Number(
     Math.max(
       0.18,
@@ -2100,7 +2206,7 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
         0.73,
         0.73 -
           Math.min((nearbyBuildings.length * 0.015) + (nearbyBuildings[0]?.shadow_pressure || 0) * 0.08, 0.18) -
-          Math.min((nearbyCanopy.length * 0.01) + (nearbyCanopy[0]?.shadow_pressure || 0) * 0.07, 0.12) -
+          Math.min((nearbyCanopy.length * 0.01) + (nearbyCanopy[0]?.canopy_pressure || 0) * 0.07, 0.12) -
           (terrainClass === "rolling" ? 0.06 : terrainClass === "steep" ? 0.12 : 0),
       ),
     ).toFixed(2),
@@ -2110,6 +2216,21 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
       ? "east"
       : "north";
   const primaryBuilding = nearbyBuildings[0];
+  const gardenEnvelope = buildDemoGardenEnvelope({
+    latitude: roundedLatitude,
+    longitude: roundedLongitude,
+    widthMeters: envelopeWidthMeters,
+    heightMeters: envelopeHeightMeters,
+    primaryBuilding,
+  });
+  const planningEnvelopeBounds = gardenEnvelope.bounds;
+  const planningCoreBounds = {
+    south: Number((planningEnvelopeBounds.south + (planningEnvelopeBounds.north - planningEnvelopeBounds.south) * 0.12).toFixed(6)),
+    north: Number((planningEnvelopeBounds.north - (planningEnvelopeBounds.north - planningEnvelopeBounds.south) * 0.12).toFixed(6)),
+    west: Number((planningEnvelopeBounds.west + (planningEnvelopeBounds.east - planningEnvelopeBounds.west) * 0.12).toFixed(6)),
+    east: Number((planningEnvelopeBounds.east - (planningEnvelopeBounds.east - planningEnvelopeBounds.west) * 0.12).toFixed(6)),
+  };
+  const planningCoreAreaSqM = Number((envelopeWidthMeters * envelopeHeightMeters * 0.73).toFixed(1));
   const usableRoofAreaSquareMeters = Number(
     ((primaryBuilding?.footprint_area_square_meters || 0) * ROOF_COVERAGE_FACTOR).toFixed(1),
   );
@@ -2147,17 +2268,17 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
     match_quality: matchQuality || "high",
     match_envelope: {
       bounds: envelope,
-      width_m: 78.4,
-      height_m: 57.2,
+      width_m: envelopeWidthMeters,
+      height_m: envelopeHeightMeters,
       source: bounds ? "geocoder-match-envelope" : "synthetic-planning-envelope",
       label: bounds ? "Geocoder match envelope" : "Planning envelope",
     },
     parcel_context: {
-      source: bounds ? "geocoder-match-envelope" : "synthetic-planning-envelope",
-      label: "Planning core",
-      bounds: envelope,
-      gross_area_sq_m: Number((78.4 * 57.2).toFixed(1)),
-      gross_area_sq_ft: Number((78.4 * 57.2 * 10.7639).toFixed(0)),
+      source: "building-anchored-planning-envelope",
+      label: "Garden planning envelope",
+      bounds: planningEnvelopeBounds,
+      gross_area_sq_m: Number((envelopeWidthMeters * envelopeHeightMeters).toFixed(1)),
+      gross_area_sq_ft: Number((envelopeWidthMeters * envelopeHeightMeters * 10.7639).toFixed(0)),
       shape_class: "compact",
       edge_buffer_m: edgeBufferM,
       planning_core_bounds: planningCoreBounds,
@@ -2165,8 +2286,8 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
       planning_core_area_sq_ft: Number((planningCoreAreaSqM * 10.7639).toFixed(0)),
       planning_core_share: 0.73,
       estimated_plantable_share: estimatedPlantableShare,
-      estimated_plantable_area_sq_m: Number(((78.4 * 57.2) * estimatedPlantableShare).toFixed(1)),
-      estimated_plantable_area_sq_ft: Number(((78.4 * 57.2) * estimatedPlantableShare * 10.7639).toFixed(0)),
+      estimated_plantable_area_sq_m: Number(((envelopeWidthMeters * envelopeHeightMeters) * estimatedPlantableShare).toFixed(1)),
+      estimated_plantable_area_sq_ft: Number(((envelopeWidthMeters * envelopeHeightMeters) * estimatedPlantableShare * 10.7639).toFixed(0)),
       terrain_limit: terrainClass === "rolling" ? "moderate" : terrainClass === "steep" ? "high" : "low",
       open_side: openSide,
       directional_open_score: {
@@ -2175,7 +2296,8 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
         east: Number((1.65 - directionalPressure.east - canopyDirectionalPressure.east).toFixed(2)),
         west: Number((1.65 - directionalPressure.west - canopyDirectionalPressure.west).toFixed(2)),
       },
-      summary: `Planning envelope covers about ${Number((78.4 * 57.2 * 10.7639).toFixed(0))} sq ft. An inset planning core keeps about ${Number((planningCoreAreaSqM * 10.7639).toFixed(0))} sq ft away from edge effects, with the most open side looking ${openSide}.`,
+      focus_anchor: gardenEnvelope.focusAnchor,
+      summary: `Planning envelope covers about ${Number((envelopeWidthMeters * envelopeHeightMeters * 10.7639).toFixed(0))} sq ft. An inset planning core keeps about ${Number((planningCoreAreaSqM * 10.7639).toFixed(0))} sq ft away from edge effects, with the most open side looking ${openSide}. The envelope is shifted toward the ${gardenEnvelope.focusAnchor?.garden_side || "yard"} side of the matched building to pull away from the street-side address point.`,
     },
     building_context: {
       source: "demo",
@@ -2222,9 +2344,9 @@ function buildDemoPropertyContext({ latitude, longitude, bounds, matchQuality })
       summary: `Building, vegetation, and terrain cues read as ${obstructionRisk} obstruction risk.`,
     },
     roof_capacity_context: roofCapacityContext,
-    summary: `${buildingCount} nearby building footprints and ${canopyCount} canopy features found. Local terrain reads as ${terrainClass} with a ${dominantAspect} bias. Planning envelope covers about ${Number((78.4 * 57.2 * 10.7639).toFixed(0))} sq ft. ${roofCapacityContext.summary}`,
+    summary: `${buildingCount} nearby building footprints and ${canopyCount} canopy features found. Local terrain reads as ${terrainClass} with a ${dominantAspect} bias. Planning envelope covers about ${Number((envelopeWidthMeters * envelopeHeightMeters * 10.7639).toFixed(0))} sq ft. ${roofCapacityContext.summary}`,
     model_note:
-      "This context layer uses nearby buildings, mapped vegetation, terrain cues, and an inset planning core from the address-match envelope. Fences and parcel-certified boundaries are not modeled yet.",
+      "This context layer uses nearby buildings, mapped vegetation, terrain cues, and a building-anchored garden planning envelope derived from the address-match envelope. Fences and parcel-certified boundaries are not modeled yet.",
   };
 }
 

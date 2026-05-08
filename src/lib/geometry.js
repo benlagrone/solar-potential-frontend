@@ -1,3 +1,5 @@
+import { defaultCareCadenceId, defaultZonePurposeId } from "./gardenZonePlanning.js";
+
 const EARTH_RADIUS_METERS = 6371000;
 const SQ_METERS_TO_SQ_FEET = 10.7639;
 
@@ -133,5 +135,8 @@ export function buildGardenZone(points, index) {
     centroid: polygonCentroid(points),
     areaSquareMeters: Number(areaSquareMeters.toFixed(1)),
     areaSquareFeet,
+    observedShadeProfile: "auto",
+    zonePurposeId: defaultZonePurposeId,
+    careCadenceId: defaultCareCadenceId,
   };
 }

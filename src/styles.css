@@ -371,6 +371,10 @@ button {
   align-items: start;
 }
 
+.layout-grid-garden {
+  grid-template-columns: minmax(240px, 290px) minmax(0, 1.8fr);
+}
+
 .results-column {
   display: grid;
   gap: 24px;
@@ -1012,6 +1016,79 @@ button {
   align-items: center;
 }
 
+.garden-shade-controls {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(20, 32, 51, 0.08);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.garden-planning-controls {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(20, 32, 51, 0.08);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.garden-shade-controls strong {
+  display: block;
+  margin: 6px 0 8px;
+  font-family: "Space Grotesk", "Avenir Next", sans-serif;
+}
+
+.garden-planning-controls strong {
+  display: block;
+  margin: 6px 0 8px;
+  font-family: "Space Grotesk", "Avenir Next", sans-serif;
+}
+
+.garden-shade-controls p,
+.garden-planning-controls p,
+.garden-shade-field small {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.garden-planning-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.garden-planning-note {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.garden-shade-field {
+  display: grid;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.garden-shade-field select {
+  width: 100%;
+  border: 1px solid rgba(20, 32, 51, 0.12);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text-main);
+  font: inherit;
+}
+
+.garden-shade-field select:focus {
+  outline: 2px solid rgba(31, 108, 92, 0.22);
+  border-color: rgba(31, 108, 92, 0.35);
+}
+
 .insight-heading {
   display: flex;
   gap: 12px;
@@ -1311,6 +1388,11 @@ button {
   width: 100%;
   height: min(72vh, 680px);
   min-height: 440px;
+}
+
+.layout-grid-garden .property-map {
+  height: min(88vh, 860px);
+  min-height: 640px;
 }
 
 .map-note-row {
@@ -1688,6 +1770,11 @@ button {
       "hub hub"
       "south south";
   }
+
+  .layout-grid-garden .property-map {
+    height: min(78vh, 760px);
+    min-height: 520px;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1712,6 +1799,11 @@ button {
 
   .property-map {
     min-height: 320px;
+  }
+
+  .layout-grid-garden .property-map {
+    height: min(68vh, 600px);
+    min-height: 400px;
   }
 
   .map-insight-row span {

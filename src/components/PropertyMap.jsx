@@ -33,16 +33,37 @@ const mapStyles = {
     maxNativeZoom: 19,
     maxZoom: 22,
   },
+  satellite: {
+    label: "Satellite",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attribution:
+      'Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+    focusZoom: 22,
+    maxNativeZoom: 20,
+    maxZoom: 22,
+  },
   terrain: {
     label: "Terrain",
-    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
     attribution:
-      'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="https://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
-    focusZoom: 22,
-    maxNativeZoom: 17,
+      'Sources: Esri, HERE, Garmin, Intermap, INCREMENT P, GEBCO, USGS, FAO, NPS, NRCan, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Mapwithyou, NOSTRA, &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, and the GIS User Community',
+    focusZoom: 20,
+    maxNativeZoom: 20,
     maxZoom: 22,
   },
 };
+
+function getDefaultStyleId(mode) {
+  if (mode === "garden") {
+    return "satellite";
+  }
+
+  if (mode === "space-weather") {
+    return "terrain";
+  }
+
+  return "streets";
+}
 
 function formatLabel(value) {
   return String(value || "unknown")
@@ -438,6 +459,15 @@ function buildViewportBounds({ preview, propertyContext, roofSelection, gardenZo
     }
   }
 
+  if (mode === "garden") {
+    const gardenEnvelopeBounds = buildBoundsArray(
+      propertyContext?.parcel_context?.bounds || propertyContext?.match_envelope?.bounds,
+    );
+    if (gardenEnvelopeBounds) {
+      return gardenEnvelopeBounds;
+    }
+  }
+
   if (mode === "solar" && roofSelection?.geometry) {
     const roofBounds = buildPositionsBounds([
       buildLeafletPositions(roofSelection.geometry),
@@ -575,10 +605,10 @@ export default function PropertyMap({
   onRemoveSelectedGardenZone,
   onClearGardenZones,
 }) {
-  const [styleId, setStyleId] = useState(mode === "space-weather" ? "terrain" : "streets");
-  const [showContextEnvelope, setShowContextEnvelope] = useState(mode === "garden");
-  const [showPlanningCore, setShowPlanningCore] = useState(mode === "garden");
-  const [showBuildingContext, setShowBuildingContext] = useState(mode === "garden");
+  const [styleId, setStyleId] = useState(() => getDefaultStyleId(mode));
+  const [showContextEnvelope, setShowContextEnvelope] = useState(false);
+  const [showPlanningCore, setShowPlanningCore] = useState(false);
+  const [showBuildingContext, setShowBuildingContext] = useState(false);
   const activeStyle = mapStyles[styleId];
   const isDrawing = Boolean(drawingTarget);
   const isSolarMode = mode === "solar";
@@ -586,16 +616,21 @@ export default function PropertyMap({
   const isGardenMode = mode === "garden";
 
   useEffect(() => {
-    setStyleId(mode === "space-weather" ? "terrain" : "streets");
-    setShowContextEnvelope(mode === "garden");
-    setShowPlanningCore(mode === "garden");
-    setShowBuildingContext(mode === "garden");
+    setStyleId(getDefaultStyleId(mode));
+    setShowContextEnvelope(false);
+    setShowPlanningCore(false);
+    setShowBuildingContext(false);
   }, [mode]);
 
   const showPreviewBounds = useMemo(() => shouldUsePreviewBounds(preview), [preview]);
+  const shouldRenderPreviewBounds = showPreviewBounds && !isGardenMode;
+  const highlightedBuildingId =
+    propertyContext?.roof_capacity_context?.candidate_building_id ||
+    propertyContext?.building_context?.nearest_building?.id ||
+    null;
 
   const previewBounds = useMemo(() => {
-    if (!showPreviewBounds) {
+    if (!shouldRenderPreviewBounds) {
       return null;
     }
 
@@ -603,7 +638,7 @@ export default function PropertyMap({
       [preview.bounds.south, preview.bounds.west],
       [preview.bounds.north, preview.bounds.east],
     ];
-  }, [preview, showPreviewBounds]);
+  }, [preview, shouldRenderPreviewBounds]);
 
   const draftPositions = useMemo(() => buildLeafletPositions(drawingPoints), [drawingPoints]);
   const roofPositions = useMemo(
@@ -611,7 +646,9 @@ export default function PropertyMap({
     [roofSelection],
   );
   const propertyContextBounds = useMemo(() => {
-    const bounds = propertyContext?.match_envelope?.bounds;
+    const bounds = isGardenMode
+      ? propertyContext?.parcel_context?.bounds || propertyContext?.match_envelope?.bounds
+      : propertyContext?.match_envelope?.bounds;
     if (!bounds) {
       return null;
     }
@@ -620,7 +657,7 @@ export default function PropertyMap({
       [bounds.south, bounds.west],
       [bounds.north, bounds.east],
     ];
-  }, [propertyContext]);
+  }, [isGardenMode, propertyContext]);
   const planningCoreBounds = useMemo(() => {
     const bounds = propertyContext?.parcel_context?.planning_core_bounds;
     if (!bounds) {
@@ -635,6 +672,10 @@ export default function PropertyMap({
 
   const selectedGardenZone =
     gardenZones.find((zone) => zone.id === selectedGardenZoneId) || gardenZones[0] || null;
+  const mappedBuildingCount = propertyContext?.building_context?.building_count || 0;
+  const mappedCanopyCount = propertyContext?.canopy_context?.canopy_count || 0;
+  const sitingCoreAreaSquareFeet = Math.round(propertyContext?.parcel_context?.planning_core_area_sq_ft || 0);
+  const hasMappedObstructionContext = mappedBuildingCount > 0 || mappedCanopyCount > 0;
 
   return (
     <section className="panel map-panel">
@@ -784,14 +825,14 @@ export default function PropertyMap({
             className={`map-style-button ${showContextEnvelope ? "map-style-button-active" : ""}`}
             onClick={() => setShowContextEnvelope((current) => !current)}
           >
-            {showContextEnvelope ? "Hide envelope" : "Show envelope"}
+            {showContextEnvelope ? "Hide context area" : "Show context area"}
           </button>
           <button
             type="button"
             className={`map-style-button ${showPlanningCore ? "map-style-button-active" : ""}`}
             onClick={() => setShowPlanningCore((current) => !current)}
           >
-            {showPlanningCore ? "Hide planning core" : "Show planning core"}
+            {showPlanningCore ? "Hide siting core" : "Show siting core"}
           </button>
           <button
             type="button"
@@ -801,9 +842,10 @@ export default function PropertyMap({
             {showBuildingContext ? "Hide buildings" : "Show buildings"}
           </button>
           <span className="map-context-copy">
-            {propertyContext.building_context?.building_count || 0} nearby buildings ·{" "}
-            {propertyContext.canopy_context?.canopy_count || 0} canopy features ·{" "}
-            {Math.round(propertyContext.parcel_context?.planning_core_area_sq_ft || 0)} sq ft core
+            {hasMappedObstructionContext
+              ? `${mappedBuildingCount} mapped buildings · ${mappedCanopyCount} canopy features`
+              : "No mapped buildings or canopy in this context slice"}{" "}
+            · {sitingCoreAreaSquareFeet} sq ft siting core
           </span>
         </div>
       ) : null}
@@ -844,9 +886,9 @@ export default function PropertyMap({
             <Rectangle
               bounds={propertyContextBounds}
               pathOptions={{
-                color: "#67758c",
-                weight: 2,
-                dashArray: "8 6",
+                color: isGardenMode ? "#1f6c5c" : "#67758c",
+                weight: isGardenMode ? 2.5 : 2,
+                dashArray: isGardenMode ? undefined : "8 6",
                 fillOpacity: 0,
               }}
             />
@@ -871,14 +913,21 @@ export default function PropertyMap({
                   key={building.id}
                   positions={buildLeafletPositions(building.geometry || [])}
                   pathOptions={{
-                    color: "#344253",
-                    fillColor: "#344253",
-                    fillOpacity: 0.16,
-                    weight: 2,
+                    color: building.id === highlightedBuildingId ? "#d17623" : "#1f6c5c",
+                    fillColor: building.id === highlightedBuildingId ? "#f2ab27" : "#1f6c5c",
+                    fillOpacity: building.id === highlightedBuildingId ? 0.18 : 0.08,
+                    weight: building.id === highlightedBuildingId ? 4 : 3,
+                    dashArray: building.id === highlightedBuildingId ? undefined : "6 5",
                   }}
                 >
                   <Popup>
                     <strong>{building.name || "Nearby building"}</strong>
+                    {building.id === highlightedBuildingId ? (
+                      <>
+                        <br />
+                        Matched structure anchor
+                      </>
+                    ) : null}
                     <br />
                     {building.kind || "building"} · {building.height_m} m tall
                     <br />
@@ -998,21 +1047,34 @@ export default function PropertyMap({
 
       <div className="map-note-row">
         <span className="map-note">
-          Street view uses OpenStreetMap. Terrain uses OpenTopoMap for topographic context.
+          Street is best for labels, Satellite is best for beds and canopy edges, and Terrain is
+          best for slope and surrounding elevation cues.
         </span>
+        {styleId === "satellite" ? (
+          <span className="map-note">
+            Satellite is now the default garden view because it is the clearest layer for real yard
+            placement.
+          </span>
+        ) : null}
         {styleId === "terrain" ? (
           <span className="map-note">
-            Terrain can zoom to parcel scale now, but it overzooms past native tile detail so it
-            will look softer than Street.
+            Terrain is contextual only. Use it to read slope and surrounding relief, then switch
+            back to Satellite or Street for exact zone placement.
           </span>
         ) : null}
         {isGardenMode && propertyContext ? (
           <span className="map-note">
             Context overlays use nearby OpenStreetMap building footprints, canopy features, terrain
-            samples, and an inset planning core. They are planning cues, not certified parcel data.
+            samples, and a siting core. They are planning cues, not certified parcel data.
           </span>
         ) : null}
-        {showPreviewBounds ? (
+        {isGardenMode && propertyContext && (showContextEnvelope || showPlanningCore) ? (
+          <span className="map-note">
+            The context area is the rough slice used for nearby shade and siting math. The siting
+            core is the inset portion used to reduce edge and street-front bias. Neither line is a
+            parcel boundary.
+          </span>
+        ) : shouldRenderPreviewBounds ? (
           <span className="map-note">
             The outer outline is the geocoder match envelope. The inner dashed rectangle is the
             inset planning core, not a parcel boundary.

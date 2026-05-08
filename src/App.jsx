@@ -17,9 +17,16 @@ import {
   upsertPropertyRecord,
 } from "./lib/api.js";
 import { trackBuddyPageView } from "./lib/analytics.js";
-import { analyzeGardenZones } from "./lib/gardenAnalysis.js";
+import { analyzeGardenZones, shadeProfileOptions } from "./lib/gardenAnalysis.js";
 import { buildGardenZone, buildRoofModel } from "./lib/geometry.js";
 import { buildPlantingGuidance } from "./lib/plantGuidance.js";
+import {
+  careCadenceOptions,
+  getCareCadenceOption,
+  getZonePurposeOption,
+  normalizeGardenZoneContext,
+  zonePurposeOptions,
+} from "./lib/gardenZonePlanning.js";
 
 const pageModes = [
   { id: "solar", label: "Solar Buddy" },
@@ -325,6 +332,14 @@ function getMatchLabel(matchQuality) {
   }
 
   return "Match not rated";
+}
+
+function getShadeProfileOption(profileId) {
+  return shadeProfileOptions.find((option) => option.id === profileId) || shadeProfileOptions[0];
+}
+
+function normalizeGardenZones(zones) {
+  return (zones || []).map((zone) => normalizeGardenZoneContext(zone));
 }
 
 function buildPropertyPreviewFromEstimate(estimate, previousPreview) {
@@ -1675,17 +1690,20 @@ function GardenClimatePanel({
 function GardenSiteContextPanel({ context, loading, error, zone }) {
   const parcelContext = context?.parcel_context || null;
   const parcelPlacement = zone?.analysis?.parcelPlacement || null;
+  const planningEnvelopeLabel = parcelContext ? "Context area" : context?.match_envelope?.label || "Context area";
+  const planningEnvelopeWidthMeters =
+    parcelContext || context?.match_envelope ? context?.match_envelope?.width_m || 0 : 0;
 
   return (
     <section className="panel garden-context-panel">
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Site context</p>
-          <h2>Nearby buildings, canopy, terrain, and planning envelope</h2>
+          <h2>Nearby buildings, canopy, terrain, and siting context</h2>
         </div>
         <p className="panel-copy">
-          This context layer now adds mapped canopy cues plus an inset planning core from the saved
-          address-match envelope. It is still not parcel-certified or tree-perfect.
+          This context layer now adds mapped canopy cues plus a building-anchored context area and
+          inset siting core. It is still not parcel-certified or tree-perfect.
         </p>
       </div>
 
@@ -1729,7 +1747,7 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
               tone="neutral"
             />
             <LevelBadge
-              label={context.match_envelope?.label || "Planning envelope"}
+              label={planningEnvelopeLabel}
               tone="neutral"
             />
             <LevelBadge
@@ -1742,7 +1760,7 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
             <StatCard
               label="Nearby buildings"
               value={String(context.building_context?.building_count || 0)}
-              detail={`${formatNumber(context.match_envelope?.width_m || 0, 0)} m context width`}
+              detail={`${formatNumber(planningEnvelopeWidthMeters, 0)} m context width`}
             />
             <StatCard
               label="Mapped canopy"
@@ -1754,7 +1772,7 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
               }
             />
             <StatCard
-              label="Planning core"
+              label="Siting core"
               value={
                 parcelContext
                   ? `${formatNumber(parcelContext.planning_core_area_sq_ft || 0, 0)} sq ft`
@@ -1765,7 +1783,7 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
                   ? `${formatNumber(parcelContext.edge_buffer_m || 0, 1)} m edge buffer · ${formatLabel(
                       parcelContext.shape_class,
                     )}`
-                  : "Parcel-aware planning core has not loaded yet."
+                  : "Parcel-aware siting core has not loaded yet."
               }
             />
             <StatCard
@@ -1835,8 +1853,8 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
               value={parcelPlacement?.label || "Pending zone"}
               detail={
                 parcelPlacement
-                  ? `${formatNumber(parcelPlacement.coreCoverageRatio * 100, 0)}% inside planning core`
-                  : "Draw or select a zone to score siting against the planning core."
+                  ? `${formatNumber(parcelPlacement.coreCoverageRatio * 100, 0)}% inside the siting core`
+                  : "Draw or select a zone to score siting against the siting core."
               }
             />
           </div>
@@ -1883,11 +1901,11 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
             </article>
 
             <article className="guidance-card">
-              <strong>Planning envelope</strong>
+              <strong>Context area</strong>
               {parcelContext ? (
                 <div className="status-list">
                   <div className="status-row">
-                    <strong>Planning core</strong>
+                    <strong>Siting core</strong>
                     <p>{parcelContext.summary}</p>
                   </div>
                   <div className="status-row">
@@ -1895,7 +1913,7 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
                     <p>
                       {parcelPlacement
                         ? parcelPlacement.summary
-                        : "Draw or select a zone to compare it against the inset planning core."}
+                        : "Draw or select a zone to compare it against the inset siting core."}
                     </p>
                   </div>
                 </div>
@@ -1911,7 +1929,7 @@ function GardenSiteContextPanel({ context, loading, error, zone }) {
                   <strong>Zone model</strong>
                   <p>
                     Zone sun hours now temper the open-sky estimate with nearby building pressure,
-                    mapped canopy cues, a light terrain bias, and an inset planning core instead of
+                    mapped canopy cues, a light terrain bias, and an inset siting core instead of
                     relying on latitude and lot position alone.
                   </p>
                 </div>
@@ -2129,7 +2147,10 @@ function GardenZoneSelector({ zones, selectedZoneId, onSelect }) {
     <section className="garden-zone-selector">
       <p className="eyebrow">Mapped zones</p>
       <div className="garden-zone-grid">
-        {zones.map((zone) => (
+        {zones.map((zone) => {
+          const observedShade = getShadeProfileOption(zone.observedShadeProfile);
+          const zonePurpose = getZonePurposeOption(zone.zonePurposeId);
+          return (
           <button
             key={zone.id}
             type="button"
@@ -2143,13 +2164,100 @@ function GardenZoneSelector({ zones, selectedZoneId, onSelect }) {
               <SunClassBadge sunClass={zone.analysis?.sunClass} />
               <span>{formatNumber(zone.areaSquareFeet, 0)} sq ft</span>
             </div>
+            <span>{observedShade.shortLabel} shade · {zonePurpose.shortLabel}</span>
             <span>
               {formatNumber(zone.analysis?.growingSeasonAverageSunHours ?? 0, 1)} hrs/day avg
               Apr-Sep
             </span>
           </button>
-        ))}
+          );
+        })}
       </div>
+    </section>
+  );
+}
+
+function GardenShadeControls({ zone, onChange }) {
+  if (!zone) {
+    return null;
+  }
+
+  const observedShade = getShadeProfileOption(zone.observedShadeProfile);
+
+  return (
+    <section className="garden-shade-controls">
+      <div>
+        <p className="eyebrow">Observed shade</p>
+        <strong>Use Satellite or on-site tree cover to tune {zone.name}</strong>
+        <p>
+          When mapped canopy data is thin, choose the closest real-world shade profile so similar
+          beds do not collapse into the same open-sky result.
+        </p>
+      </div>
+
+      <label className="garden-shade-field">
+        <span>Shade profile</span>
+        <select value={zone.observedShadeProfile || "auto"} onChange={(event) => onChange(zone.id, event.target.value)}>
+          {shadeProfileOptions.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <small>{observedShade.summary}</small>
+      </label>
+    </section>
+  );
+}
+
+function GardenPlanningControls({ zone, onChange }) {
+  if (!zone) {
+    return null;
+  }
+
+  const zonePurpose = getZonePurposeOption(zone.zonePurposeId);
+  const careCadence = getCareCadenceOption(zone.careCadenceId);
+
+  return (
+    <section className="garden-planning-controls">
+      <div>
+        <p className="eyebrow">Repeat-use planning</p>
+        <strong>Save how {zone.name} should behave after the map work is done</strong>
+        <p>
+          These fields stay with the saved property record so the zone reopens as a real plan, not
+          just a polygon. They also create the first clean hooks for later garden reminders.
+        </p>
+      </div>
+
+      <div className="garden-planning-grid">
+        <label className="garden-shade-field">
+          <span>Zone use</span>
+          <select value={zone.zonePurposeId || zonePurpose.id} onChange={(event) => onChange(zone.id, { zonePurposeId: event.target.value })}>
+            {zonePurposeOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <small>{zonePurpose.summary}</small>
+        </label>
+
+        <label className="garden-shade-field">
+          <span>Care rhythm</span>
+          <select value={zone.careCadenceId || careCadence.id} onChange={(event) => onChange(zone.id, { careCadenceId: event.target.value })}>
+            {careCadenceOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <small>{careCadence.summary}</small>
+        </label>
+      </div>
+
+      <p className="garden-planning-note">
+        {zonePurpose.automationHint} {careCadence.automationHint}
+      </p>
     </section>
   );
 }
@@ -2976,7 +3084,7 @@ export default function App() {
 
   function hydrateSavedPropertyRecord(record) {
     const restoredRoofSelection = record?.roof_selection || null;
-    const restoredGardenZones = record?.garden_zones || [];
+    const restoredGardenZones = normalizeGardenZones(record?.garden_zones);
     const restoredSolarReports = record?.saved_solar_reports || [];
     const restoredPropertyContext = record?.property_context || null;
     const restoredPropertyClimate = record?.property_climate || null;
@@ -3038,6 +3146,7 @@ export default function App() {
     nextPropertyClimate = propertyClimate,
   }) {
     setPropertyRecordSaving(true);
+    const normalizedGardenZones = normalizeGardenZones(nextGardenZones);
 
     try {
       const savedRecord = await upsertPropertyRecord({
@@ -3047,12 +3156,15 @@ export default function App() {
         propertyContext: nextPropertyContext,
         propertyClimate: nextPropertyClimate,
         roofSelection: nextRoofSelection,
-        gardenZones: nextGardenZones,
+        gardenZones: normalizedGardenZones,
       });
       setPropertyRecordGuid(savedRecord.guid);
       setPropertyContext(savedRecord.property_context || nextPropertyContext || null);
       setPropertyClimate(savedRecord.property_climate || nextPropertyClimate || null);
       setSavedSolarReports(savedRecord.saved_solar_reports || []);
+      if (savedRecord.garden_zones) {
+        setGardenZones(normalizeGardenZones(savedRecord.garden_zones));
+      }
       if (isGardenPage || (savedRecord.garden_zones || []).length) {
         void loadSavedGardenPlans({ background: true });
       }
@@ -3140,7 +3252,7 @@ export default function App() {
       }
       const existingRecord = await findPropertyRecordByAddress(resolvedAddress);
       const restoredRoofSelection = existingRecord?.roof_selection ?? roofSelection;
-      const restoredGardenZones = existingRecord?.garden_zones ?? gardenZones;
+      const restoredGardenZones = normalizeGardenZones(existingRecord?.garden_zones ?? gardenZones);
       const restoredPropertyContext = existingRecord?.property_context ?? null;
       const savedRecord = await persistPropertyRecord({
         guid: existingRecord?.guid ?? propertyRecordGuid,
@@ -3185,7 +3297,7 @@ export default function App() {
       resetPropertyState();
       const existingRecord = await findPropertyRecordByAddress(resolvedAddress);
       const restoredRoofSelection = existingRecord?.roof_selection ?? null;
-      const restoredGardenZones = existingRecord?.garden_zones ?? [];
+      const restoredGardenZones = normalizeGardenZones(existingRecord?.garden_zones ?? []);
       const restoredPropertyContext = existingRecord?.property_context ?? null;
       const savedRecord = await persistPropertyRecord({
         guid: existingRecord?.guid ?? null,
@@ -3345,6 +3457,58 @@ export default function App() {
 
     if (drawingTarget === "garden") {
       cancelDrawing();
+    }
+  }
+
+  async function handleUpdateGardenZoneShadeProfile(zoneId, nextShadeProfileId) {
+    const nextGardenZones = gardenZones.map((zone) =>
+      zone.id === zoneId
+        ? normalizeGardenZoneContext({ ...zone, observedShadeProfile: nextShadeProfileId })
+        : normalizeGardenZoneContext(zone),
+    );
+
+    setGardenZones(nextGardenZones);
+
+    if (propertyPreview) {
+      try {
+        await persistPropertyRecord({
+          address: propertyPreview.address || form.address,
+          preview: propertyPreview,
+          nextRoofSelection: roofSelection,
+          nextGardenZones,
+        });
+      } catch (submissionError) {
+        setPropertyError(
+          submissionError.message ||
+            "Shade profile updated locally, but saving the revised garden plan failed.",
+        );
+      }
+    }
+  }
+
+  async function handleUpdateGardenZonePlanningContext(zoneId, updates) {
+    const nextGardenZones = gardenZones.map((zone) =>
+      zone.id === zoneId
+        ? normalizeGardenZoneContext({ ...zone, ...updates })
+        : normalizeGardenZoneContext(zone),
+    );
+
+    setGardenZones(nextGardenZones);
+
+    if (propertyPreview) {
+      try {
+        await persistPropertyRecord({
+          address: propertyPreview.address || form.address,
+          preview: propertyPreview,
+          nextRoofSelection: roofSelection,
+          nextGardenZones,
+        });
+      } catch (submissionError) {
+        setPropertyError(
+          submissionError.message ||
+            "Zone planning context updated locally, but saving the revised garden plan failed.",
+        );
+      }
     }
   }
 
@@ -3520,7 +3684,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="layout-grid">
+      <main className={`layout-grid ${isGardenPage ? "layout-grid-garden" : ""}`}>
         <section className="panel intake-panel">
           <div className="panel-heading">
             <div>
@@ -3803,12 +3967,19 @@ export default function App() {
           {isGardenPage ? (
             <div className="guidance-stack">
               <article className="guidance-card">
-                <strong>Use Street first</strong>
-                <p>Street tiles are better for lot-level inspection and nearby structures.</p>
+                <strong>Use Satellite first</strong>
+                <p>Satellite is now the default for garden planning because it is the clearest layer for real bed placement.</p>
               </article>
               <article className="guidance-card">
-                <strong>Use Terrain second</strong>
-                <p>Terrain is now contextual only. Use it for slope and surrounding elevation cues, not parcel-close placement.</p>
+                <strong>Use Street second</strong>
+                <p>Street tiles are better for labels, nearby structures, and orienting to the address match.</p>
+              </article>
+              <article className="guidance-card">
+                <strong>Use Terrain third</strong>
+                <p>
+                  Terrain now uses a higher-detail topo basemap. Use it for slope and surrounding
+                  elevation cues, then switch back to Satellite or Street for exact zone edges.
+                </p>
               </article>
             </div>
           ) : null}
@@ -4196,10 +4367,10 @@ export default function App() {
                         )} modeled sun hours per day from April through September.${selectedGardenZone.analysis.contextAdjustment?.maxMonthlyPenaltyHours ? ` Nearby structures can trim the open-sky estimate by as much as ${formatNumber(
                           selectedGardenZone.analysis.contextAdjustment.maxMonthlyPenaltyHours,
                           1,
-                        )} hrs/day in the strongest month.` : ""}${selectedGardenZone.analysis.parcelPlacement ? ` ${selectedGardenZone.analysis.parcelPlacement.label} with about ${formatNumber(
+                        )} hrs/day in the strongest month.` : ""}${selectedGardenZone.analysis.mappedCanopyRead?.suggestedShadeProfile?.id && selectedGardenZone.analysis.mappedCanopyRead.suggestedShadeProfile.id !== "auto" ? ` Mapped canopy currently reads closer to ${selectedGardenZone.analysis.mappedCanopyRead.suggestedShadeProfile.label.toLowerCase()} here.` : ""}${selectedGardenZone.analysis.observedShadeProfile?.id && selectedGardenZone.analysis.observedShadeProfile.id !== "auto" ? ` Observed shade is set to ${selectedGardenZone.analysis.observedShadeProfile.label.toLowerCase()}, which is now part of the zone model.` : ""}${selectedGardenZone.analysis.parcelPlacement ? ` ${selectedGardenZone.analysis.parcelPlacement.label} with about ${formatNumber(
                           selectedGardenZone.analysis.parcelPlacement.coreCoverageRatio * 100,
                           0,
-                        )}% of sampled zone points staying inside the current planning core.` : ""}${propertyClimate?.growing_season?.average_temperature_f != null && propertyClimate?.growing_season?.average_relative_humidity != null ? ` Property climate for that same window averages about ${formatNumber(
+                        )}% of sampled zone points staying inside the current siting core.` : ""}${selectedGardenZone.zonePurposeId ? ` Saved as a ${getZonePurposeOption(selectedGardenZone.zonePurposeId).shortLabel.toLowerCase()} zone with a ${getCareCadenceOption(selectedGardenZone.careCadenceId).label.toLowerCase()} rhythm.` : ""}${propertyClimate?.growing_season?.average_temperature_f != null && propertyClimate?.growing_season?.average_relative_humidity != null ? ` Property climate for that same window averages about ${formatNumber(
                           propertyClimate.growing_season.average_temperature_f,
                           1,
                         )}°F and ${formatNumber(
@@ -4213,6 +4384,16 @@ export default function App() {
                     zones={analyzedGardenZones}
                     selectedZoneId={selectedGardenZone?.id || null}
                     onSelect={setSelectedGardenZoneId}
+                  />
+
+                  <GardenShadeControls
+                    zone={selectedGardenZone}
+                    onChange={handleUpdateGardenZoneShadeProfile}
+                  />
+
+                  <GardenPlanningControls
+                    zone={selectedGardenZone}
+                    onChange={handleUpdateGardenZonePlanningContext}
                   />
 
                   <div className="stats-grid">
@@ -4257,6 +4438,32 @@ export default function App() {
                       }
                     />
                     <StatCard
+                      label="Observed shade"
+                      value={getShadeProfileOption(selectedGardenZone?.observedShadeProfile).shortLabel}
+                      detail={getShadeProfileOption(selectedGardenZone?.observedShadeProfile).summary}
+                    />
+                    <StatCard
+                      label="Mapped canopy read"
+                      value={
+                        selectedGardenZone?.analysis?.mappedCanopyRead?.suggestedShadeProfile?.shortLabel ||
+                        "Open"
+                      }
+                      detail={
+                        selectedGardenZone?.analysis?.mappedCanopyRead?.summary ||
+                        "Mapped canopy detail appears after zone analysis runs."
+                      }
+                    />
+                    <StatCard
+                      label="Zone use"
+                      value={getZonePurposeOption(selectedGardenZone?.zonePurposeId).shortLabel}
+                      detail={getZonePurposeOption(selectedGardenZone?.zonePurposeId).summary}
+                    />
+                    <StatCard
+                      label="Care rhythm"
+                      value={getCareCadenceOption(selectedGardenZone?.careCadenceId).shortLabel}
+                      detail={getCareCadenceOption(selectedGardenZone?.careCadenceId).summary}
+                    />
+                    <StatCard
                       label="Planning confidence"
                       value={selectedGardenZone?.analysis?.confidence?.label || "Pending"}
                       detail={
@@ -4278,7 +4485,7 @@ export default function App() {
                       value={
                         propertyContext
                           ? propertyContext.parcel_context
-                            ? "Buildings + canopy + terrain + planning core"
+                            ? "Buildings + canopy + terrain + siting core"
                             : (propertyContext.canopy_context?.canopy_count || 0) > 0
                               ? "Buildings + canopy + terrain"
                               : "Buildings + terrain"
@@ -4287,7 +4494,7 @@ export default function App() {
                       detail={
                         propertyContext
                           ? propertyContext.parcel_context
-                            ? `${propertyContext.building_context?.building_count || 0} nearby buildings, ${propertyContext.canopy_context?.canopy_count || 0} canopy features, and ${formatNumber(propertyContext.parcel_context.planning_core_area_sq_ft || 0, 0)} sq ft inside the planning core`
+                            ? `${propertyContext.building_context?.building_count || 0} nearby buildings, ${propertyContext.canopy_context?.canopy_count || 0} canopy features, and ${formatNumber(propertyContext.parcel_context.planning_core_area_sq_ft || 0, 0)} sq ft inside the siting core`
                             : `${propertyContext.building_context?.building_count || 0} nearby buildings and ${propertyContext.canopy_context?.canopy_count || 0} canopy features in the current context radius`
                           : "Site context has not loaded yet."
                       }
@@ -4300,10 +4507,10 @@ export default function App() {
                           ? `${formatNumber(
                               selectedGardenZone.analysis.parcelPlacement.coreCoverageRatio * 100,
                               0,
-                            )}% inside planning core · ${formatLabel(
+                            )}% inside siting core · ${formatLabel(
                               selectedGardenZone.analysis.parcelPlacement.terrainLimit,
                             )} terrain constraint`
-                          : "Zone siting appears after the planning core is available."
+                          : "Zone siting appears after the siting core is available."
                       }
                     />
                   </div>
@@ -4339,7 +4546,7 @@ export default function App() {
                       <strong>
                         {propertyContext
                           ? propertyContext.parcel_context
-                            ? "Planning core + site-context cues"
+                            ? "Siting core + site-context cues"
                             : (propertyContext.canopy_context?.canopy_count || 0) > 0
                               ? "Buildings, canopy, and terrain cues"
                               : "Buildings and terrain only"
@@ -4396,8 +4603,20 @@ export default function App() {
                               1,
                             )}{" "}
                             hrs/day in the growing season before the current building, canopy, and
-                            terrain slice is applied.
+                            terrain slice and any observed shade override are applied.
                           </p>
+                        ) : null}
+                        {selectedGardenZone.analysis.observedShadeProfile?.id &&
+                        selectedGardenZone.analysis.observedShadeProfile.id !== "auto" ? (
+                          <p>
+                            Observed shade profile:{" "}
+                            {selectedGardenZone.analysis.observedShadeProfile.label}. Use Satellite
+                            plus on-site tree cover to keep tuning this zone.
+                          </p>
+                        ) : null}
+                        {selectedGardenZone.analysis.mappedCanopyRead?.suggestedShadeProfile?.id &&
+                        selectedGardenZone.analysis.mappedCanopyRead.suggestedShadeProfile.id !== "auto" ? (
+                          <p>{selectedGardenZone.analysis.mappedCanopyRead.summary}</p>
                         ) : null}
                         {selectedGardenZone.analysis.contextAdjustment?.strongestBuilding ? (
                           <p>
@@ -4416,6 +4635,11 @@ export default function App() {
                         {selectedGardenZone.analysis.parcelPlacement ? (
                           <p>{selectedGardenZone.analysis.parcelPlacement.summary}</p>
                         ) : null}
+                        <p>
+                          Saved plan role: {getZonePurposeOption(selectedGardenZone.zonePurposeId).label}.{" "}
+                          Care rhythm: {getCareCadenceOption(selectedGardenZone.careCadenceId).label}.{" "}
+                          {getZonePurposeOption(selectedGardenZone.zonePurposeId).automationHint}
+                        </p>
                         <p>{selectedGardenZone.analysis.sunClass.description}</p>
                       </div>
 
